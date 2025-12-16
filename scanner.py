@@ -41,4 +41,9 @@ def parse_form4_xml(xml_bytes: bytes):
     ticker = issuer.findtext("issuerTradingSymbol", default="")
 
     owner = root.find("reportingOwner")
-    rel =
+rel = owner.find("reportingOwnerRelationship")
+title = rel.findtext("officerTitle", default="")
+is_officer = rel.findtext("isOfficer", default="0") == "1"
+is_10 = rel.findtext("isTenPercentOwner", default="0") == "1"
+owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
+
