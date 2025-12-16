@@ -1,0 +1,31 @@
+name: Daily Form 4 Scanner
+
+on:
+  schedule:
+    - cron: "30 12 * * *"   # 12:30 UTC = 7:30am ET
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run scanner
+        env:
+          SEC_USER_AGENT: "Form4Scanner/1.0 (contact: cigspy@icloud.com)"
+          LOOKBACK_HOURS: "24"
+
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: |
+          python scanner.py
