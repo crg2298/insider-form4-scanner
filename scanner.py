@@ -87,3 +87,12 @@ def parse_form4_xml(xml_bytes: bytes):
         "transactions": transactions,
         "total_dollars": round(sum(t["dollars"] for t in transactions), 2),
     }
+
+def main():
+    send_email(
+        "TEST: Form 4 Scanner",
+        "If you received this email, your GitHub Action + Gmail SMTP setup works ✅"
+    )
+
+if __name__ == "__main__":
+    main()
