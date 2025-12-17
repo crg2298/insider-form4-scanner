@@ -178,7 +178,11 @@ def main():
             f"Link: {link}\n"
             "----------------------"
         )
-    body = "🚨 TEST OVERRIDE: PIPELINE CONFIRMED WORKING 🚨"
+if not body_lines:
+    body = "No notable insider buying activity found in the last 24 hours."
+else:
+    body = "\n".join(body_lines)
+
 
 
     write_daily_update_html(body, "docs/index.html")
