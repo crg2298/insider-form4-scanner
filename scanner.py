@@ -6,6 +6,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
 
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
+
 def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
     template_path = "docs/template.html"
 
@@ -24,42 +26,20 @@ def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
             .replace(">", "&gt;")
     )
 
-    html = (tpl.replace("{{TITLE}}", title)
+    html = (
+        tpl.replace("{{TITLE}}", title)
                .replace("{{H1}}", h1)
                .replace("{{SUBTITLE}}", subtitle)
                .replace("{{UPDATED}}", now_utc)
                .replace("{{HOURS}}", str(LOOKBACK_HOURS))
                .replace("{{BODY}}", safe_body))
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html)
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body {{ font-family: -apple-system, system-ui, Arial, sans-serif; background:#fff; color:#111; margin: 24px; }}
-    .wrap {{ max-width: 900px; margin: 0 auto; }}
-    h1 {{ font-size: 28px; margin: 0 0 8px; }}
-    .meta {{ color:#666; margin-bottom: 18px; }}
-    pre {{ white-space: pre-wrap; word-wrap: break-word; background:#f6f7f9; padding:16px; border-radius:12px; }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>Daily Insider Log</h1>
-    <div class="meta">Last updated (UTC): {today}</div>
-    <pre>{text}</pre>
-  </div>
-</body>
-</html>"""
+)
+   
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
 SEC_UA = os.getenv("SEC_USER_AGENT", "Form4Scanner/1.0 (contact: your_email@example.com)")
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
 
 def http_get(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": SEC_UA})
