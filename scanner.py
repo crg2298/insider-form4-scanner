@@ -188,13 +188,6 @@ def main():
     # OPTIONAL EMAIL (leave commented if not needed)
     # send_email(subject, body)
 
-    
-
-    for entry in feed.findall("atom:entry", ns):
-        updated = entry.findtext("atom:updated", default="", namespaces=ns)
-        if not updated:
-            continue
-
         updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
         if updated_dt < cutoff:
             continue
