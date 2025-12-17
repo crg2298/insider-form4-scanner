@@ -170,6 +170,11 @@ def main():
 
         if not parsed:
             continue
+            
+        # Minimum purchase threshold: $50,000
+        if not parsed.get("total_dollars") or parsed["total_dollars"] < 50_000:
+            continue
+
 
         body_lines.append(
             f"{parsed['issuer']} ({parsed['ticker']})\n"
