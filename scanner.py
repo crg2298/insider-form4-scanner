@@ -32,7 +32,7 @@ def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
                .replace("{{SUBTITLE}}", subtitle)
                .replace("{{UPDATED}}", now_utc)
                .replace("{{HOURS}}", str(LOOKBACK_HOURS))
-               .replace("{{BODY}}", safe_body))
+               .replace("{{BODY}}", safe_body)
 )
    
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
