@@ -188,68 +188,6 @@ def main():
     # OPTIONAL EMAIL (leave commented if not needed)
     # send_email(subject, body)
 
-        updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
-        if updated_dt < cutoff:
-            continue
-
-        # filing details page
-        link = None
-        for l in entry.findall("atom:link", ns):
-            if l.get("rel") == "alternate":
-                link = l.get("href")
-        if not link:
-            continue
-
-        # pull filing page HTML, then find XML file link
-        try:
-            detail_html = http_get(link).decode("utf-8", errors="ignore")
-        except:
-            continue
-
-        idx = detail_html.lower().find(".xml")
-        if idx == -1:
-            continue
-
-        href_start = detail_html.rfind('href="', 0, idx)
-        if href_start == -1:
-            continue
-
-        href_start += len('href="')
-        href_end = detail_html.find('"', href_start)
-        xml_path = detail_html[href_start:href_end]
-
-        if not xml_path.lower().endswith(".xml"):
-            continue
-
-        xml_url = xml_path if xml_path.startswith("http") else "https://www.sec.gov" + xml_path
-
-        try:
-            xml_bytes = http_get(xml_url)
-            parsed = parse_form4_xml(xml_bytes)
-            if parsed:
-                parsed["filing_url"] = link
-                hits.append(parsed)
-        except:
-            continue
-
-    # Email results
-    if not body_lines:
-        # OPTIONAL: comment this out if you ONLY want emails on purchases
-        send_email("Form 4 Scanner: No purchase alerts", "No Form 4 open-market purchases (code P) found in the last lookback window.")
-        return
-
-    lines = []
-    for h in hits:
-        lines.append(f"{h['issuer']} ({h['ticker']})")
-        lines.append(f"Insider: {h['owner']} | Role: {h['role']} | 10% owner: {h['is_10_percent_owner']}")
-        lines.append(f"Total $: ${h['total_dollars']}")
-        for t in h["transactions"]:
-            lines.append(f"  - {t['date']} | P | {t['shares']} shares @ ${t['price']} = ${t['dollars']}")
-        lines.append(f"Filing: {h['filing_url']}")
-        lines.append("")
-
-    send_email(f"Form 4 Scanner: {len(hits)} purchase alert(s)", "\n".join(lines).strip())
-
 
 if __name__ == "__main__":
     main()
