@@ -121,7 +121,6 @@ def parse_form4_xml(xml_bytes: bytes):
     }
 
 def main():
-    body = "TEST UPDATE – PIPELINE IS WORKING"
 
     rss_url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=4&company=&dateb=&owner=only&start=0&count=100&output=atom"
     atom = http_get(rss_url).decode("utf-8", errors="ignore")
@@ -179,6 +178,7 @@ def main():
             f"Link: {link}\n"
             "----------------------"
         )
+    body = "🚨 TEST OVERRIDE: PIPELINE CONFIRMED WORKING 🚨"
 
 
     write_daily_update_html(body, "docs/index.html")
