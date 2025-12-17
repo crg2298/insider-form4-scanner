@@ -38,7 +38,6 @@ def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Daily Insider Log — {today}</title>
   <style>
     body {{ font-family: -apple-system, system-ui, Arial, sans-serif; background:#fff; color:#111; margin: 24px; }}
     .wrap {{ max-width: 900px; margin: 0 auto; }}
