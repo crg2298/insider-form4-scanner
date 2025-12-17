@@ -178,10 +178,7 @@ def main():
             "----------------------"
         )
 
-    if not body_lines:
-        body = "No notable insider buying activity found in the last 24 hours."
-    else:
-        body = "\n\n".join(body_lines)
+        body = "TEST UPDATE — PIPELINE IS WORKING"
 
     write_daily_update_html(body, "docs/index.html")
 
