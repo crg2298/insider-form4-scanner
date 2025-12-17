@@ -236,7 +236,7 @@ def main():
             continue
 
     # Email results
-    if not hits:
+    if not body_lines:
         # OPTIONAL: comment this out if you ONLY want emails on purchases
         send_email("Form 4 Scanner: No purchase alerts", "No Form 4 open-market purchases (code P) found in the last lookback window.")
         return
