@@ -6,6 +6,34 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
 
+def write_daily_update_html(text: str, out_path: str = "docs/index.html") -> None:
+    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Daily Insider Log — {today}</title>
+  <style>
+    body {{ font-family: -apple-system, system-ui, Arial, sans-serif; background:#fff; color:#111; margin: 24px; }}
+    .wrap {{ max-width: 900px; margin: 0 auto; }}
+    h1 {{ font-size: 28px; margin: 0 0 8px; }}
+    .meta {{ color:#666; margin-bottom: 18px; }}
+    pre {{ white-space: pre-wrap; word-wrap: break-word; background:#f6f7f9; padding:16px; border-radius:12px; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Daily Insider Log</h1>
+    <div class="meta">Last updated (UTC): {today}</div>
+    <pre>{text}</pre>
+  </div>
+</body>
+</html>"""
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
 SEC_UA = os.getenv("SEC_USER_AGENT", "Form4Scanner/1.0 (contact: your_email@example.com)")
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
 
@@ -91,14 +119,72 @@ def parse_form4_xml(xml_bytes: bytes):
 def main():
     rss_url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=4&company=&dateb=&owner=only&start=0&count=100&output=atom"
     atom = http_get(rss_url).decode("utf-8", errors="ignore")
-
     feed = ET.fromstring(atom)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
-
     now = dt.datetime.utcnow()
     cutoff = now - dt.timedelta(hours=LOOKBACK_HOURS)
+    body_lines = []
+    subject = "Daily Insider Activity Update"
 
-    hits = []
+    for entry in feed.findall("atom:entry", ns):
+        updated = entry.findtext("atom:updated", default="", namespaces=ns)
+        if not updated:
+            continue
+
+        updated_dt = dt.datetime.fromisoformat(
+            updated.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+
+        if updated_dt < cutoff:
+            continue
+
+        link = None
+        for l in entry.findall("atom:link", ns):
+            if l.get("rel") == "alternate":
+                link = l.get("href")
+
+        if not link:
+            continue
+
+        filing_page = http_get(link).decode("utf-8", errors="ignore")
+
+        # Find XML link
+        xml_url = None
+        for line in filing_page.splitlines():
+            if ".xml" in line and "form4" in line.lower():
+                start = line.find("https://")
+                end = line.find(".xml") + 4
+                xml_url = line[start:end]
+                break
+
+        if not xml_url:
+            continue
+
+        xml_bytes = http_get(xml_url)
+        parsed = parse_form4_xml(xml_bytes)
+
+        if not parsed:
+            continue
+
+        body_lines.append(
+            f"{parsed['issuer']} ({parsed['ticker']})\n"
+            f"Insider: {parsed['owner']} ({parsed['role']})\n"
+            f"Total Buy: ${parsed['total_dollars']:,.2f}\n"
+            f"Link: {link}\n"
+            "----------------------"
+        )
+
+    if not body_lines:
+        body = "No notable insider buying activity found in the last 24 hours."
+    else:
+        body = "\n\n".join(body_lines)
+
+    write_daily_update_html(body, "docs/index.html")
+
+    # OPTIONAL EMAIL (leave commented if not needed)
+    # send_email(subject, body)
+
+    
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", default="", namespaces=ns)
