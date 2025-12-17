@@ -6,9 +6,34 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
 
-def write_daily_update_html(text: str, out_path: str = "docs/index.html") -> None:
-    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
-    html = f"""<!doctype html>
+def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
+    template_path = "docs/template.html"
+
+    now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    title = "Daily Insider Log"
+    h1 = "Daily Insider Log"
+    subtitle = "Rare insider buys, summarized in plain English."
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        tpl = f.read()
+
+    # escape HTML
+    safe_body = (
+        body.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+
+    html = (tpl.replace("{{TITLE}}", title)
+               .replace("{{H1}}", h1)
+               .replace("{{SUBTITLE}}", subtitle)
+               .replace("{{UPDATED}}", now_utc)
+               .replace("{{HOURS}}", str(LOOKBACK_HOURS))
+               .replace("{{BODY}}", safe_body))
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
 <html>
 <head>
   <meta charset="utf-8" />
