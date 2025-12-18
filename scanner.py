@@ -5,167 +5,171 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
-# =========================
+# =====================
 # CONFIG
-# =========================
+# =====================
+
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
-SEC_UA = os.getenv(
-    "SEC_USER_AGENT",
-    "Form4Scanner/1.0 (contact: your_email@example.com)"
+
+SEC_USER_AGENT = (
+    os.getenv("SEC_USER_AGENT", "")
+    .strip()
+    .replace("\n", "")
 )
 
-# =========================
-# HELPERS
-# =========================
+if not SEC_USER_AGENT:
+    raise RuntimeError("SEC_USER_AGENT is required")
+
+FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
+
+# =====================
+# HTTP
+# =====================
+
 def http_get(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": SEC_UA})
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": SEC_USER_AGENT}
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
-def write_daily_update_html(body: str, out_path="docs/index.html"):
-    with open("docs/template.html", "r", encoding="utf-8") as f:
-        tpl = f.read()
+# =====================
+# HTML OUTPUT
+# =====================
+
+def write_daily_update_html(body: str):
+    os.makedirs("docs", exist_ok=True)
 
     now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    title = "Upside Discovery"
-    h1 = "Upside Discovery"
-    subtitle = (
-        "Tracking rare insider buying and analyst conviction "
-        "to surface overlooked upside before it becomes obvious."
-    )
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Daily Insider Log</title>
+<style>
+body {{ font-family: Arial, sans-serif; max-width: 800px; margin: auto; }}
+pre {{ white-space: pre-wrap; }}
+</style>
+</head>
+<body>
+<h1>Daily Insider Log</h1>
+<h3>Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours</h3>
+<p><em>Updated {now_utc}</em></p>
+<pre>{body}</pre>
+</body>
+</html>
+"""
 
-    safe_body = (
-        body.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-    )
-
-    html = (
-        tpl.replace("{{TITLE}}", title)
-           .replace("{{H1}}", h1)
-           .replace("{{SUBTITLE}}", subtitle)
-           .replace("{{UPDATED}}", now_utc)
-           .replace("{{HOURS}}", str(LOOKBACK_HOURS))
-           .replace("{{BODY}}", safe_body)
-    )
-
-    os.makedirs("docs", exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-# =========================
+# =====================
 # FORM 4 PARSER
-# =========================
+# =====================
+
 def parse_form4_xml(xml_bytes: bytes):
     root = ET.fromstring(xml_bytes)
 
     issuer = root.find("issuer")
     ticker = issuer.findtext("issuerTradingSymbol", default="").strip()
+    issuer_name = issuer.findtext("issuerName", default="Unknown")
 
     owner = root.find("reportingOwner")
-    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
-
     rel = owner.find("reportingOwnerRelationship")
+
+    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
     role = rel.findtext("officerTitle", default="Insider")
 
-    table = root.find("nonDerivativeTable")
-    if table is None:
+    nd = root.find("nonDerivativeTable")
+    if nd is None:
         return None
 
-    transactions = []
+    total = 0.0
+    date = ""
 
-    for tx in table.findall("nonDerivativeTransaction"):
+    for tx in nd.findall("nonDerivativeTransaction"):
         code = tx.find("transactionCoding").findtext("transactionCode", "")
         if code != "P":
             continue
 
         date = tx.find("transactionDate").findtext("value", "")
-        shares = float(tx.find("transactionAmounts/transactionShares/value").text or 0)
-        price = float(tx.find("transactionAmounts/transactionPricePerShare/value").text or 0)
+        shares = float(tx.find("transactionAmounts")
+                         .find("transactionShares")
+                         .findtext("value", "0") or 0)
 
-        transactions.append({
-            "date": date,
-            "dollars": shares * price
-        })
+        price = float(
+            tx.find("transactionAmounts")
+              .find("transactionPricePerShare")
+              .findtext("value", "0") or 0
+        )
 
-    if not transactions:
+        total += shares * price
+
+    if total <= 0:
         return None
 
     return {
         "ticker": ticker,
+        "issuer": issuer_name,
         "owner": owner_name,
         "role": role,
-        "transactions": transactions,
-        "total_dollars": round(sum(t["dollars"] for t in transactions), 2),
-        "date": transactions[-1]["date"]
+        "total_dollars": round(total, 2),
+        "date": date
     }
 
-# =========================
+# =====================
 # ANALYST UPGRADES
-# =========================
-def fetch_analyst_upgrades(api_key):
-    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+# =====================
+
+def fetch_analyst_upgrades():
+    if not FMP_API_KEY:
+        return []
+
+    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={FMP_API_KEY}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": SEC_USER_AGENT, "Accept": "application/json"}
+    )
 
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
-            data = json.loads(r.read().decode())
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
     except Exception:
         return []
 
     signals = []
     for item in data:
-        old_t = item.get("priceTargetPrior")
-        new_t = item.get("priceTarget")
-        if not old_t or not new_t or new_t <= old_t:
+        old = item.get("priceTargetPrior")
+        new = item.get("priceTarget")
+        if not old or not new or new <= old:
             continue
 
-        pct = (new_t - old_t) / old_t
+        pct = (new - old) / old
         if pct < 0.07:
             continue
 
         signals.append({
             "symbol": item.get("symbol"),
-            "old": old_t,
-            "new": new_t,
-            "pct": round(pct * 100, 1)
+            "analyst": item.get("analystCompany"),
+            "pct": round(pct * 100, 1),
+            "date": item.get("publishedDate", "")[:10]
         })
 
     return signals
 
-# =========================
-# PHASE 3 SCORING
-# =========================
-def role_score(role: str) -> int:
-    role = role.lower()
-    if "ceo" in role:
-        return 4
-    if "cfo" in role:
-        return 3
-    if "president" in role:
-        return 2
-    return 1
-
-def confidence_score(hits, analyst=False):
-    score = 0
-    score += min(len(hits), 3)
-    score += min(sum(h["total_dollars"] for h in hits) / 100_000, 3)
-    score += max(role_score(h["role"]) for h in hits)
-    if analyst:
-        score += 2
-    return round(min(score, 10), 1)
-
-# =========================
+# =====================
 # MAIN
-# =========================
-def main():
-    body_lines = []
-    insider_hits = []
+# =====================
 
+def main():
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
     feed = ET.fromstring(http_get(rss).decode("utf-8", "ignore"))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
+
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
+    insider_hits = []
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -176,20 +180,18 @@ def main():
         if updated_dt < cutoff:
             continue
 
-        link = next(
-            (l.get("href") for l in entry.findall("atom:link", ns) if l.get("rel") == "alternate"),
-            None,
-        )
+        link = next((l.get("href") for l in entry.findall("atom:link", ns) if l.get("rel") == "alternate"), None)
         if not link:
             continue
 
-        filing = http_get(link).decode("utf-8", "ignore")
+        page = http_get(link).decode("utf-8", "ignore")
 
         xml_url = None
-        for line in filing.splitlines():
+        for line in page.splitlines():
             if ".xml" in line and "form4" in line.lower():
-                xml_url = line[line.find("https://"): line.find(".xml") + 4]
+                xml_url = line[line.find("https://"):line.find(".xml") + 4]
                 break
+
         if not xml_url:
             continue
 
@@ -199,47 +201,35 @@ def main():
 
         insider_hits.append(parsed)
 
-    # -------- CLUSTERS --------
+    body = []
+
+    # Phase 1 — Cluster buys
     groups = defaultdict(list)
     for h in insider_hits:
         groups[h["ticker"]].append(h)
 
     clusters = {k: v for k, v in groups.items() if len(v) >= 2}
 
-    analyst_signals = fetch_analyst_upgrades(os.getenv("FMP_API_KEY"))
-    analyst_map = {a["symbol"]: a for a in analyst_signals}
-
     if clusters:
-        body_lines.append(f"\n🔥 HIGH-CONVICTION CLUSTERS (Last {LOOKBACK_HOURS} Hours)\n")
-
+        body.append("🔥 CLUSTER INSIDER BUYING\n")
         for ticker, hits in clusters.items():
-            analyst = ticker in analyst_map
-            score = confidence_score(hits, analyst)
-
-            body_lines.append(
-                f"{ticker} — Confidence Score: {score}/10\n"
-                f"{len(hits)} insiders | ${sum(h['total_dollars'] for h in hits):,.0f}\n"
-            )
-
+            total = sum(h["total_dollars"] for h in hits)
+            body.append(f"{ticker} — {len(hits)} buys, ${total:,.0f}\n")
             for h in hits:
-                body_lines.append(
-                    f"  • {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f}\n"
-                )
+                body.append(f"  • {h['owner']} ({h['role']}) ${h['total_dollars']:,.0f} on {h['date']}\n")
+            body.append("-" * 30 + "\n")
 
-            if analyst:
-                a = analyst_map[ticker]
-                body_lines.append(
-                    f"  🚀 Analyst raised target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
-                )
+    # Analyst signals
+    signals = fetch_analyst_upgrades()
+    if signals:
+        body.append("\n📊 ANALYST UPGRADES\n")
+        for s in signals[:5]:
+            body.append(f"{s['symbol']} — +{s['pct']}% target raise ({s['date']})\n")
 
-            body_lines.append("-" * 35 + "\n")
+    if not body:
+        body.append(f"No notable insider buying activity in the last {LOOKBACK_HOURS} hours.")
 
-    if not body_lines:
-        body_lines.append(
-            f"No notable high-conviction insider activity found in the last {LOOKBACK_HOURS} hours.\n"
-        )
-
-    write_daily_update_html("".join(body_lines))
+    write_daily_update_html("".join(body))
 
 if __name__ == "__main__":
     main()
