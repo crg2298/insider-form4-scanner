@@ -6,6 +6,7 @@ import ssl
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
+from collections import defaultdict
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 
@@ -184,6 +185,7 @@ def main():
     now = dt.datetime.utcnow()
     cutoff = now - dt.timedelta(hours=LOOKBACK_HOURS)
     body_lines = []
+    insider_hits = []
     subject = "Daily Insider Activity Update"
     # --- Analyst upgrades setup ---
     api_key = os.environ.get("FMP_API_KEY")
@@ -199,6 +201,51 @@ def main():
         updated = entry.findtext("atom:updated", default="", namespaces=ns)
         if not updated:
             continue
+
+        parsed = parse_form4_xml(xml_bytes)
+        if not parsed:
+            continue
+            
+        # Minimum purchase threshold: $25,000
+        if not parsed.get("total_dollars") or parsed["total_dollars"] < 25_000:
+            continue
+        insider_hits.append({
+            "ticker": parsed["ticker"],
+            "owner": parsed["owner"],
+            "role": parsed["role"],
+            "total_dollars": parsed["total_dollars"],
+            "date": parsed["date"],
+        })
+        
+    # --- Phase 1: Cluster Buy Detection ---
+    ticker_groups = defaultdict(list)
+    
+    for hit in insider_hits:
+        ticker_groups[hit["ticker"]].append(hit)
+
+    cluster_buys = {
+        ticker: hits
+        for ticker, hits in ticker_groups.items()
+        if len(hits) >= 2
+    }
+    
+    if cluster_buys:
+        body_lines.append("\n🔥 CLUSTER INSIDER BUYING (Last {} Hours)\n".format(LOOKBACK_HOURS)
+        )
+
+        for ticker, hits in cluster_buys.items():
+            total = sum(h["total_dollars"] for h in hits)
+
+            body_lines.append(
+                f"{ticker} — {len(hits)} insider buys, total ${total:,.0f}\n"
+            )
+
+            for h in hits:
+                body_lines.append(
+                    f"  • {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f} on {h['date']}\n"
+                    )
+
+                body_lines.append("-" * 30 + "\n")
 
         updated_dt = dt.datetime.fromisoformat(
             updated.replace("Z", "+00:00")
@@ -228,17 +275,18 @@ def main():
 
         if not xml_url:
             continue
-
-        xml_bytes = http_get(xml_url)
-        parsed = parse_form4_xml(xml_bytes)
-
-        if not parsed:
-            continue
             
-        # Minimum purchase threshold: $25,000
-        if not parsed.get("total_dollars") or parsed["total_dollars"] < 25_000:
-            continue
+        xml_bytes = http_get(xml_url)
 
+        parsed = parse_form4_xml(xml_bytes)
+        
+         insider_hits.append({
+            "ticker": parsed.get("ticker") or parsed.get("symbol") or "UNKNOWN",
+            "insider": parsed.get("insider_name") or parsed.get("owner_name") or "Unknown",
+            "role": parsed.get("insider_role") or parsed.get("role") or "Unknown",
+            "total_dollars": float(parsed.get("total_dollars") or 0),
+            "date": parsed.get("transaction_date") or parsed.get("date") or ""
+        })    
 
         body_lines.append(
             f"{parsed['issuer']} ({parsed['ticker']})\n"
