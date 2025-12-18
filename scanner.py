@@ -9,7 +9,6 @@ from collections import defaultdict
 # CONFIG
 # =========================
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
-
 SEC_UA = os.getenv(
     "SEC_USER_AGENT",
     "Form4Scanner/1.0 (contact: your_email@example.com)"
@@ -27,6 +26,15 @@ def write_daily_update_html(body: str, out_path="docs/index.html"):
     with open("docs/template.html", "r", encoding="utf-8") as f:
         tpl = f.read()
 
+    now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    title = "Upside Discovery"
+    h1 = "Upside Discovery"
+    subtitle = (
+        "Tracking rare insider buying and analyst conviction "
+        "to surface overlooked upside before it becomes obvious."
+    )
+
     safe_body = (
         body.replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -34,7 +42,10 @@ def write_daily_update_html(body: str, out_path="docs/index.html"):
     )
 
     html = (
-        tpl.replace("{{UPDATED}}", dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+        tpl.replace("{{TITLE}}", title)
+           .replace("{{H1}}", h1)
+           .replace("{{SUBTITLE}}", subtitle)
+           .replace("{{UPDATED}}", now_utc)
            .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", safe_body)
     )
@@ -53,7 +64,7 @@ def parse_form4_xml(xml_bytes: bytes):
     ticker = issuer.findtext("issuerTradingSymbol", default="").strip()
 
     owner = root.find("reportingOwner")
-    name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
+    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
 
     rel = owner.find("reportingOwnerRelationship")
     role = rel.findtext("officerTitle", default="Insider")
@@ -62,8 +73,7 @@ def parse_form4_xml(xml_bytes: bytes):
     if table is None:
         return None
 
-    total = 0
-    date = None
+    transactions = []
 
     for tx in table.findall("nonDerivativeTransaction"):
         code = tx.find("transactionCoding").findtext("transactionCode", "")
@@ -72,49 +82,41 @@ def parse_form4_xml(xml_bytes: bytes):
 
         date = tx.find("transactionDate").findtext("value", "")
         shares = float(tx.find("transactionAmounts/transactionShares/value").text or 0)
-        price = float(
-            tx.find("transactionAmounts/transactionPricePerShare/value").text or 0
-        )
-        total += shares * price
+        price = float(tx.find("transactionAmounts/transactionPricePerShare/value").text or 0)
 
-    if total <= 0:
+        transactions.append({
+            "date": date,
+            "dollars": shares * price
+        })
+
+    if not transactions:
         return None
 
     return {
         "ticker": ticker,
-        "owner": name,
+        "owner": owner_name,
         "role": role,
-        "total_dollars": round(total, 2),
-        "date": date
+        "transactions": transactions,
+        "total_dollars": round(sum(t["dollars"] for t in transactions), 2),
+        "date": transactions[-1]["date"]
     }
 
 # =========================
-# ANALYST UPGRADES (FMP)
+# ANALYST UPGRADES
 # =========================
 def fetch_analyst_upgrades(api_key):
     url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
 
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; InsiderScanner/1.0)",
-            "Accept": "application/json"
-        }
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(url, timeout=30) as r:
             data = json.loads(r.read().decode())
-    except Exception as e:
-        print("⚠️ Analyst API error:", e)
+    except Exception:
         return []
 
     signals = []
-
     for item in data:
         old_t = item.get("priceTargetPrior")
         new_t = item.get("priceTarget")
-
         if not old_t or not new_t or new_t <= old_t:
             continue
 
@@ -124,13 +126,34 @@ def fetch_analyst_upgrades(api_key):
 
         signals.append({
             "symbol": item.get("symbol"),
-            "analyst": item.get("analystCompany"),
             "old": old_t,
             "new": new_t,
             "pct": round(pct * 100, 1)
         })
 
     return signals
+
+# =========================
+# PHASE 3 SCORING
+# =========================
+def role_score(role: str) -> int:
+    role = role.lower()
+    if "ceo" in role:
+        return 4
+    if "cfo" in role:
+        return 3
+    if "president" in role:
+        return 2
+    return 1
+
+def confidence_score(hits, analyst=False):
+    score = 0
+    score += min(len(hits), 3)
+    score += min(sum(h["total_dollars"] for h in hits) / 100_000, 3)
+    score += max(role_score(h["role"]) for h in hits)
+    if analyst:
+        score += 2
+    return round(min(score, 10), 1)
 
 # =========================
 # MAIN
@@ -144,7 +167,6 @@ def main():
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
 
-    # ---------- INSIDER LOOP ----------
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
@@ -154,11 +176,10 @@ def main():
         if updated_dt < cutoff:
             continue
 
-        link = None
-        for l in entry.findall("atom:link", ns):
-            if l.get("rel") == "alternate":
-                link = l.get("href")
-
+        link = next(
+            (l.get("href") for l in entry.findall("atom:link", ns) if l.get("rel") == "alternate"),
+            None,
+        )
         if not link:
             continue
 
@@ -169,7 +190,6 @@ def main():
             if ".xml" in line and "form4" in line.lower():
                 xml_url = line[line.find("https://"): line.find(".xml") + 4]
                 break
-
         if not xml_url:
             continue
 
@@ -179,73 +199,44 @@ def main():
 
         insider_hits.append(parsed)
 
-    # =========================
-    # PHASE 1 — CLUSTER BUYS
-    # =========================
+    # -------- CLUSTERS --------
     groups = defaultdict(list)
-    for hit in insider_hits:
-        groups[hit["ticker"]].append(hit)
+    for h in insider_hits:
+        groups[h["ticker"]].append(h)
 
     clusters = {k: v for k, v in groups.items() if len(v) >= 2}
 
+    analyst_signals = fetch_analyst_upgrades(os.getenv("FMP_API_KEY"))
+    analyst_map = {a["symbol"]: a for a in analyst_signals}
+
     if clusters:
-        body_lines.append(f"\n🔥 CLUSTER INSIDER BUYING (Last {LOOKBACK_HOURS} Hours)\n")
+        body_lines.append(f"\n🔥 HIGH-CONVICTION CLUSTERS (Last {LOOKBACK_HOURS} Hours)\n")
+
         for ticker, hits in clusters.items():
-            total = sum(h["total_dollars"] for h in hits)
-            body_lines.append(f"{ticker} — {len(hits)} buys, ${total:,.0f}\n")
+            analyst = ticker in analyst_map
+            score = confidence_score(hits, analyst)
+
+            body_lines.append(
+                f"{ticker} — Confidence Score: {score}/10\n"
+                f"{len(hits)} insiders | ${sum(h['total_dollars'] for h in hits):,.0f}\n"
+            )
+
             for h in hits:
                 body_lines.append(
-                    f"  • {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f} on {h['date']}\n"
+                    f"  • {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f}\n"
                 )
-            body_lines.append("-" * 30 + "\n")
 
-    # =========================
-    # PHASE 2 — INSIDER + ANALYST CONFLUENCE
-    # =========================
-    api_key = os.getenv("FMP_API_KEY")
-    analyst_signals = fetch_analyst_upgrades(api_key) if api_key else []
+            if analyst:
+                a = analyst_map[ticker]
+                body_lines.append(
+                    f"  🚀 Analyst raised target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
+                )
 
-    analyst_by_symbol = {a["symbol"]: a for a in analyst_signals}
+            body_lines.append("-" * 35 + "\n")
 
-    confluence = [
-        h for h in insider_hits
-        if h["ticker"] in analyst_by_symbol
-    ]
-
-    if confluence:
-        body_lines.append("\n🚀 HIGH-CONVICTION SIGNALS (Insiders + Analysts)\n")
-
-        for h in confluence:
-            a = analyst_by_symbol[h["ticker"]]
-            body_lines.append(
-                f"{h['ticker']} — Insider buy + Analyst upgrade\n"
-                f"Insider: {h['owner']} (${h['total_dollars']:,.0f})\n"
-                f"Analyst: Target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
-                "-----------------------------\n"
-            )
-
-    # =========================
-    # ANALYST SECTION (ALWAYS)
-    # =========================
-    body_lines.append("\n📊 Analyst Upgrades\n")
-
-    if analyst_signals:
-        for a in analyst_signals[:5]:
-            body_lines.append(
-                f"{a['symbol']} — {a['analyst']}\n"
-                f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
-                "-----------------------------\n"
-            )
-    else:
-        body_lines.append("No strong analyst upgrades detected.\n")
-
-    # =========================
-    # FINAL OUTPUT
-    # =========================
-    if not insider_hits:
-        body_lines.insert(
-            0,
-            f"No notable insider buying activity found in the last {LOOKBACK_HOURS} hours.\n"
+    if not body_lines:
+        body_lines.append(
+            f"No notable high-conviction insider activity found in the last {LOOKBACK_HOURS} hours.\n"
         )
 
     write_daily_update_html("".join(body_lines))
