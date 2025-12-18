@@ -122,47 +122,57 @@ def parse_form4_xml(xml_bytes: bytes):
     }
     
 def fetch_analyst_upgrades(api_key):
-        url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
-        with urllib.request.urlopen(url) as response:
+    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; InsiderScanner/1.0)",
+            "Accept": "application/json"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode())
+    except Exception as e:
+        print("⚠️ Analyst API error:", e)
+        return []
 
-        signals = []
+    signals = []
 
-        for item in data:
-            old_rating = (item.get("ratingPrior") or "").lower()
-            new_rating = (item.get("ratingCurrent") or "").lower()
+    for item in data:
+        old_rating = (item.get("ratingPrior") or "").lower()
+        new_rating = (item.get("ratingCurrent") or "").lower()
 
-            old_target = item.get("priceTargetPrior")
-            new_target = item.get("priceTarget")
+        old_target = item.get("priceTargetPrior")
+        new_target = item.get("priceTarget")
 
-            # Require upgrade + raised target
-            if not old_target or not new_target:
-                continue
-            if new_target <= old_target:
-                continue
-            if old_rating == new_rating:
-                continue
-            if old_target == 0:
-                continue
+        if not old_target or not new_target:
+            continue
+        if new_target <= old_target:
+            continue
+        if old_rating == new_rating:
+            continue
+        if old_target == 0:
+            continue
 
-            pct_change = (new_target - old_target) / old_target
+        pct_change = (new_target - old_target) / old_target
+        if pct_change < 0.10:
+            continue
 
-            # Require meaningful raise (10%+)
-            if pct_change < 0.10:
-                continue
+        signals.append({
+            "symbol": item.get("symbol"),
+            "analyst": item.get("analystCompany"),
+            "old_rating": item.get("ratingPrior"),
+            "new_rating": item.get("ratingCurrent"),
+            "old_target": old_target,
+            "new_target": new_target,
+            "pct": round(pct_change * 100, 1),
+            "date": item.get("publishedDate", "")[:10]
+        })
 
-            signals.append({
-                "symbol": item.get("symbol"),
-                "analyst": item.get("analystCompany"),
-                "old_rating": item.get("ratingPrior"),
-                "new_rating": item.get("ratingCurrent"),
-                "old_target": old_target,
-                "new_target": new_target,
-                "pct": round(pct_change * 100, 1),
-                "date": item.get("publishedDate", "")[:10]
-            })
-
-        return signals
+    return signals
 
 
 def main():
