@@ -176,7 +176,15 @@ def main():
     cutoff = now - dt.timedelta(hours=LOOKBACK_HOURS)
     body_lines = []
     subject = "Daily Insider Activity Update"
-    analyst_signals = fetch_analyst_upgrades(os.environ.get("FMP_API_KEY"))
+    # --- Analyst upgrades setup ---
+    api_key = os.environ.get("FMP_API_KEY")
+
+    if not api_key:
+        print("❌ FMP_API_KEY not found")
+        analyst_signals = []
+    else:
+        print("✅ FMP_API_KEY loaded")
+        analyst_signals = fetch_analyst_upgrades(api_key)
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", default="", namespaces=ns)
