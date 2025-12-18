@@ -5,110 +5,83 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
-# =====================
-# CONFIG
-# =====================
-
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 
-SEC_USER_AGENT = (
-    os.getenv("SEC_USER_AGENT", "")
-    .strip()
-    .replace("\n", "")
+SEC_UA = os.getenv(
+    "SEC_USER_AGENT",
+    "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 )
 
-if not SEC_USER_AGENT:
-    raise RuntimeError("SEC_USER_AGENT is required")
-
-FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
-
-# =====================
-# HTTP
-# =====================
+# -------------------------
+# Helpers
+# -------------------------
 
 def http_get(url: str) -> bytes:
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": SEC_USER_AGENT}
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": SEC_UA})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
-# =====================
-# HTML OUTPUT
-# =====================
 
-def write_daily_update_html(body: str):
-    os.makedirs("docs", exist_ok=True)
+def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
+    with open("docs/template.html", "r", encoding="utf-8") as f:
+        tpl = f.read()
 
     now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    html = f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Daily Insider Log</title>
-<style>
-body {{ font-family: Arial, sans-serif; max-width: 800px; margin: auto; }}
-pre {{ white-space: pre-wrap; }}
-</style>
-</head>
-<body>
-<h1>Daily Insider Log</h1>
-<h3>Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours</h3>
-<p><em>Updated {now_utc}</em></p>
-<pre>{body}</pre>
-</body>
-</html>
-"""
+    safe_body = (
+        body.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
 
-    with open("docs/index.html", "w", encoding="utf-8") as f:
+    html = (
+        tpl.replace("{{TITLE}}", "Daily Insider Log")
+           .replace("{{H1}}", "Daily Insider Log")
+           .replace("{{SUBTITLE}}", f"Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours")
+           .replace("{{UPDATED}}", now_utc)
+           .replace("{{BODY}}", safe_body)
+    )
+
+    os.makedirs("docs", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-# =====================
-# FORM 4 PARSER
-# =====================
 
 def parse_form4_xml(xml_bytes: bytes):
     root = ET.fromstring(xml_bytes)
 
     issuer = root.find("issuer")
-    ticker = issuer.findtext("issuerTradingSymbol", default="").strip()
-    issuer_name = issuer.findtext("issuerName", default="Unknown")
-
-    owner = root.find("reportingOwner")
-    rel = owner.find("reportingOwnerRelationship")
-
-    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
-    role = rel.findtext("officerTitle", default="Insider")
-
-    nd = root.find("nonDerivativeTable")
-    if nd is None:
+    if issuer is None:
         return None
 
-    total = 0.0
-    date = ""
+    ticker = issuer.findtext("issuerTradingSymbol", default="")
+    issuer_name = issuer.findtext("issuerName", default="")
 
-    for tx in nd.findall("nonDerivativeTransaction"):
+    owner = root.find("reportingOwner")
+    rel = owner.find("reportingOwnerRelationship") if owner is not None else None
+
+    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown") if owner is not None else "Unknown"
+    role = rel.findtext("officerTitle", default="Insider") if rel is not None else "Insider"
+
+    nd_table = root.find("nonDerivativeTable")
+    if nd_table is None:
+        return None
+
+    total = 0
+    for tx in nd_table.findall("nonDerivativeTransaction"):
         code = tx.find("transactionCoding").findtext("transactionCode", "")
         if code != "P":
             continue
 
-        date = tx.find("transactionDate").findtext("value", "")
-        shares = float(tx.find("transactionAmounts")
-                         .find("transactionShares")
-                         .findtext("value", "0") or 0)
-
-        price = float(
-            tx.find("transactionAmounts")
-              .find("transactionPricePerShare")
-              .findtext("value", "0") or 0
-        )
-
+        shares = float(tx.find("transactionAmounts/transactionShares/value").text or 0)
+        price_txt = tx.find("transactionAmounts/transactionPricePerShare/value")
+        price = float(price_txt.text) if price_txt is not None else 0
         total += shares * price
 
     if total <= 0:
         return None
+
+    date = root.findtext("periodOfReport", default="")
 
     return {
         "ticker": ticker,
@@ -116,22 +89,13 @@ def parse_form4_xml(xml_bytes: bytes):
         "owner": owner_name,
         "role": role,
         "total_dollars": round(total, 2),
-        "date": date
+        "date": date,
     }
 
-# =====================
-# ANALYST UPGRADES
-# =====================
 
-def fetch_analyst_upgrades():
-    if not FMP_API_KEY:
-        return []
-
-    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={FMP_API_KEY}"
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": SEC_USER_AGENT, "Accept": "application/json"}
-    )
+def fetch_analyst_upgrades(api_key):
+    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+    req = urllib.request.Request(url, headers={"User-Agent": SEC_UA})
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -153,18 +117,21 @@ def fetch_analyst_upgrades():
         signals.append({
             "symbol": item.get("symbol"),
             "analyst": item.get("analystCompany"),
+            "old": old,
+            "new": new,
             "pct": round(pct * 100, 1),
-            "date": item.get("publishedDate", "")[:10]
+            "date": item.get("publishedDate", "")[:10],
         })
 
     return signals
 
-# =====================
-# MAIN
-# =====================
+
+# -------------------------
+# Main
+# -------------------------
 
 def main():
-    rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
+    rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&count=100&output=atom"
     feed = ET.fromstring(http_get(rss).decode("utf-8", "ignore"))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -172,7 +139,7 @@ def main():
     insider_hits = []
 
     for entry in feed.findall("atom:entry", ns):
-        updated = entry.findtext("atom:updated", "", ns)
+        updated = entry.findtext("atom:updated", "", namespaces=ns)
         if not updated:
             continue
 
@@ -180,7 +147,10 @@ def main():
         if updated_dt < cutoff:
             continue
 
-        link = next((l.get("href") for l in entry.findall("atom:link", ns) if l.get("rel") == "alternate"), None)
+        link = None
+        for l in entry.findall("atom:link", ns):
+            if l.get("rel") == "alternate":
+                link = l.get("href")
         if not link:
             continue
 
@@ -189,47 +159,65 @@ def main():
         xml_url = None
         for line in page.splitlines():
             if ".xml" in line and "form4" in line.lower():
-                xml_url = line[line.find("https://"):line.find(".xml") + 4]
+                start = line.find("https://")
+                end = line.find(".xml") + 4
+                xml_url = line[start:end]
                 break
 
         if not xml_url:
             continue
 
         parsed = parse_form4_xml(http_get(xml_url))
-        if not parsed or parsed["total_dollars"] < 25_000:
+        if not parsed or parsed["total_dollars"] < 15000:
             continue
 
         insider_hits.append(parsed)
 
-    body = []
+    body_lines = []
 
-    # Phase 1 — Cluster buys
+    # 🔥 Cluster Buys
     groups = defaultdict(list)
     for h in insider_hits:
         groups[h["ticker"]].append(h)
 
     clusters = {k: v for k, v in groups.items() if len(v) >= 2}
-
     if clusters:
-        body.append("🔥 CLUSTER INSIDER BUYING\n")
-        for ticker, hits in clusters.items():
+        body_lines.append("\n🔥 CLUSTER INSIDER BUYING\n")
+        for t, hits in clusters.items():
             total = sum(h["total_dollars"] for h in hits)
-            body.append(f"{ticker} — {len(hits)} buys, ${total:,.0f}\n")
+            body_lines.append(f"{t} — {len(hits)} buys, ${total:,.0f}\n")
             for h in hits:
-                body.append(f"  • {h['owner']} ({h['role']}) ${h['total_dollars']:,.0f} on {h['date']}\n")
-            body.append("-" * 30 + "\n")
+                body_lines.append(f"  • {h['owner']} ({h['role']}) ${h['total_dollars']:,.0f}\n")
+            body_lines.append("-" * 30 + "\n")
 
-    # Analyst signals
-    signals = fetch_analyst_upgrades()
-    if signals:
-        body.append("\n📊 ANALYST UPGRADES\n")
-        for s in signals[:5]:
-            body.append(f"{s['symbol']} — +{s['pct']}% target raise ({s['date']})\n")
+    # ⭐ Single Buys
+    singles = [h for h in insider_hits if h["total_dollars"] >= 15000]
+    if singles:
+        body_lines.append("\n⭐ NOTABLE INSIDER BUYS\n")
+        for h in singles[:10]:
+            body_lines.append(
+                f"{h['ticker']} — {h['owner']} ({h['role']}) ${h['total_dollars']:,.0f} on {h['date']}\n"
+            )
+        body_lines.append("-" * 30 + "\n")
 
-    if not body:
-        body.append(f"No notable insider buying activity in the last {LOOKBACK_HOURS} hours.")
+    # 📊 Analyst Upgrades
+    api_key = os.getenv("FMP_API_KEY")
+    if api_key:
+        upgrades = fetch_analyst_upgrades(api_key)
+        if upgrades:
+            body_lines.append("\n📊 ANALYST UPGRADES\n")
+            for u in upgrades[:5]:
+                body_lines.append(
+                    f"{u['symbol']} — target ${u['old']} → ${u['new']} (+{u['pct']}%)\n"
+                )
 
-    write_daily_update_html("".join(body))
+    if not body_lines:
+        body = f"No notable insider buying activity in the last {LOOKBACK_HOURS} hours."
+    else:
+        body = "".join(body_lines)
+
+    write_daily_update_html(body)
+
 
 if __name__ == "__main__":
     main()
