@@ -9,45 +9,76 @@
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f172a;
+      background: linear-gradient(180deg, #020617, #0f172a);
       color: #e5e7eb;
     }
 
     .container {
       max-width: 900px;
       margin: auto;
-      padding: 40px 20px;
+      padding: 48px 20px;
     }
 
     h1 {
       font-size: 2.6rem;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
+      letter-spacing: -0.02em;
     }
 
     .subtitle {
-      font-size: 1.2rem;
-      color: #cbd5f5;
-      margin-bottom: 20px;
+      font-size: 1.15rem;
+      color: #c7d2fe;
+      margin-bottom: 18px;
     }
 
     .updated {
       color: #94a3b8;
-      font-style: italic;
-      margin-bottom: 30px;
+      font-size: 0.9rem;
+      margin-bottom: 32px;
     }
 
-    pre {
+    /* Content blocks */
+    .content {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .card {
       background: #020617;
       border: 1px solid #1e293b;
-      border-radius: 10px;
-      padding: 20px;
-      white-space: pre-wrap;
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+
+    .section-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 14px;
+    }
+
+    .item {
+      padding: 12px 0;
+      border-bottom: 1px solid #1e293b;
       line-height: 1.6;
-      font-size: 0.95rem;
+    }
+
+    .item:last-child {
+      border-bottom: none;
+    }
+
+    .muted {
+      color: #9ca3af;
+    }
+
+    .empty {
+      color: #9ca3af;
+      font-style: italic;
     }
 
     footer {
-      margin-top: 40px;
+      margin-top: 60px;
       text-align: center;
       color: #64748b;
       font-size: 0.85rem;
@@ -58,9 +89,14 @@
   <div class="container">
     <h1>{{H1}}</h1>
     <div class="subtitle">{{SUBTITLE}}</div>
-    <div class="updated">Updated {{UPDATED}}</div>
+    <div class="updated">
+      Updated {{UPDATED}} · Last {{HOURS}} hours
+    </div>
 
-    <pre>{{BODY}}</pre>
+    <!-- MAIN CONTENT -->
+    <div class="content">
+      {{BODY}}
+    </div>
 
     <footer>
       SEC Form 4 filings · Financial Modeling Prep · Automated daily
