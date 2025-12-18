@@ -198,24 +198,47 @@ def main():
         analyst_signals = fetch_analyst_upgrades(api_key)
 
     for entry in feed.findall("atom:entry", ns):
-        updated = entry.findtext("atom:updated", default="", namespaces=ns)
-        if not updated:
-            continue
+    updated = entry.findtext("atom:updated", default="", namespaces=ns)
+    if not updated:
+        continue
 
-        parsed = parse_form4_xml(xml_bytes)
-        if not parsed:
-            continue
-            
-        # Minimum purchase threshold: $25,000
-        if not parsed.get("total_dollars") or parsed["total_dollars"] < 25_000:
-            continue
-        insider_hits.append({
-            "ticker": parsed["ticker"],
-            "owner": parsed["owner"],
-            "role": parsed["role"],
-            "total_dollars": parsed["total_dollars"],
-            "date": parsed["date"],
-        })
+    link = None
+    for l in entry.findall("atom:link", ns):
+        if l.get("rel") == "alternate":
+            link = l.get("href")
+
+    if not link:
+        continue
+
+    filing_page = http_get(link).decode("utf-8", errors="ignore")
+
+    # --- Find XML link (MUST be inside loop) ---
+    xml_url = None
+    for line in filing_page.splitlines():
+        if ".xml" in line and "form4" in line.lower():
+            start = line.find("https://")
+            end = line.find(".xml") + 4
+            xml_url = line[start:end]
+            break
+
+    if not xml_url:
+        continue
+
+    xml_bytes = http_get(xml_url)
+    parsed = parse_form4_xml(xml_bytes)
+    if not parsed:
+        continue
+
+    if not parsed.get("total_dollars") or parsed["total_dollars"] < 25_000:
+        continue
+
+    insider_hits.append({
+        "ticker": parsed["ticker"],
+        "owner": parsed["owner"],
+        "role": parsed["role"],
+        "total_dollars": parsed["total_dollars"],
+        "date": parsed["date"],
+    })
         
     # --- Phase 1: Cluster Buy Detection ---
     ticker_groups = defaultdict(list)
@@ -263,23 +286,7 @@ def main():
             continue
 
         filing_page = http_get(link).decode("utf-8", errors="ignore")
-
-        # Find XML link
-        xml_url = None
-        for line in filing_page.splitlines():
-            if ".xml" in line and "form4" in line.lower():
-                start = line.find("https://")
-                end = line.find(".xml") + 4
-                xml_url = line[start:end]
-                break
-
-        if not xml_url:
-            continue
-            
-        xml_bytes = http_get(xml_url)
-
-        parsed = parse_form4_xml(xml_bytes)
-        
+              
          insider_hits.append({
             "ticker": parsed.get("ticker") or parsed.get("symbol") or "UNKNOWN",
             "insider": parsed.get("insider_name") or parsed.get("owner_name") or "Unknown",
