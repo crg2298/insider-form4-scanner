@@ -21,7 +21,7 @@ jobs:
 
       - name: Run scanner
         env:
-          SEC_USER_AGENT: "Form4Scanner/1.0 (contact: cigspy@icloud.com)"
+          SEC_USER_AGENT: "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
           LOOKBACK_HOURS: "24"
 
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
@@ -30,6 +30,8 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: |
           python scanner.py
 
