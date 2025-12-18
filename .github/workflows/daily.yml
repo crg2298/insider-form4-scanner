@@ -11,6 +11,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,9 +22,16 @@ jobs:
 
       - name: Run scanner
         env:
-          SEC_USER_AGENT: "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
+          # REQUIRED — SEC compliance
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+
+          # Lookback window
           LOOKBACK_HOURS: "72"
 
+          # Analyst API
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+
+          # Email (optional — only used if send_email is enabled)
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -31,7 +39,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
 
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: |
           python scanner.py
 
