@@ -7,7 +7,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
 
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 
 def write_daily_update_html(body: str, out_path: str = "docs/index.html"):
     template_path = "docs/template.html"
