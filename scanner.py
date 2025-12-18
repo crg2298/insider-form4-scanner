@@ -2,139 +2,113 @@ import datetime as dt
 import os
 import json
 import urllib.request
-import ssl
-import smtplib
 import xml.etree.ElementTree as ET
-from email.mime.text import MIMEText
 from collections import defaultdict
 
-# -------------------------
-# CONFIG
-# -------------------------
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
+SEC_UA = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
-SEC_UA = os.getenv(
-    "SEC_USER_AGENT",
-    "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-).strip()  # IMPORTANT: prevents invalid header crash
-
-FMP_API_KEY = os.getenv("FMP_API_KEY")
-
-# -------------------------
-# HTTP
-# -------------------------
+# ---------------- HTTP ----------------
 def http_get(url: str) -> bytes:
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": SEC_UA}
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": SEC_UA})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
-# -------------------------
-# HTML OUTPUT
-# -------------------------
-def write_html(body: str, out_path="docs/index.html"):
-    now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+# ---------------- HTML ----------------
+def write_html(body: str):
+    now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
 <title>Daily Insider Log</title>
 <style>
 body {{
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #0f172a;
-  color: #e5e7eb;
+  background: #f3f4f6;
+  margin: 0;
   padding: 40px;
 }}
 .container {{
-  max-width: 900px;
+  max-width: 960px;
   margin: auto;
-  background: #020617;
-  padding: 32px;
+}}
+.card {{
+  background: white;
+  padding: 24px;
+  margin-bottom: 24px;
   border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
 }}
 h1 {{
-  font-size: 36px;
-  margin-bottom: 6px;
+  margin-top: 0;
 }}
-.subtitle {{
+.section-title {{
   font-size: 18px;
-  color: #94a3b8;
-  margin-bottom: 24px;
+  font-weight: 600;
+  margin-bottom: 12px;
 }}
-.updated {{
-  font-style: italic;
-  margin-bottom: 24px;
-  color: #cbd5f5;
+.small {{
+  color: #555;
+  font-size: 14px;
 }}
-pre {{
-  white-space: pre-wrap;
-  line-height: 1.5;
+.score {{
+  font-weight: 700;
+  color: #16a34a;
+}}
+.soft {{
+  color: #888;
 }}
 </style>
 </head>
 <body>
 <div class="container">
+
+<div class="card">
 <h1>Daily Insider Log</h1>
-<div class="subtitle">Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours</div>
-<div class="updated">Updated {now}</div>
-<pre>{body}</pre>
+<div class="small">Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours</div>
+<div class="small">Updated {now_utc}</div>
+</div>
+
+{body}
+
 </div>
 </body>
-</html>
-"""
+</html>"""
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
+    os.makedirs("docs", exist_ok=True)
+    with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-# -------------------------
-# FORM 4 PARSER
-# -------------------------
-def parse_form4(xml_bytes: bytes):
+# ---------------- FORM 4 PARSER ----------------
+def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
 
     issuer = root.find("issuer")
-    if issuer is None:
-        return None
-
-    ticker = issuer.findtext("issuerTradingSymbol", "").strip()
+    ticker = issuer.findtext("issuerTradingSymbol", "")
 
     owner = root.find("reportingOwner")
-    if owner is None:
-        return None
-
-    name = owner.find("reportingOwnerId").findtext("rptOwnerName", "Unknown")
+    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", "Unknown")
 
     rel = owner.find("reportingOwnerRelationship")
-    role = rel.findtext("officerTitle", "") if rel is not None else ""
+    role = rel.findtext("officerTitle", "Insider")
 
     table = root.find("nonDerivativeTable")
     if table is None:
         return None
 
     total = 0
-    date = ""
-
     for tx in table.findall("nonDerivativeTransaction"):
         code = tx.find("transactionCoding").findtext("transactionCode", "")
         if code != "P":
             continue
 
-        date = tx.find("transactionDate").findtext("value", "")
         shares = float(tx.find("transactionAmounts")
-                         .find("transactionShares")
-                         .findtext("value", "0") or 0)
-
-        price = float(
-            tx.find("transactionAmounts")
-              .find("transactionPricePerShare")
-              .findtext("value", "0") or 0
-        )
-
+                       .find("transactionShares")
+                       .findtext("value", "0") or 0)
+        price = float(tx.find("transactionAmounts")
+                      .find("transactionPricePerShare")
+                      .findtext("value", "0") or 0)
         total += shares * price
 
     if total <= 0:
@@ -142,67 +116,58 @@ def parse_form4(xml_bytes: bytes):
 
     return {
         "ticker": ticker,
-        "owner": name,
-        "role": role or "Insider",
+        "owner": owner_name,
+        "role": role,
         "total": round(total, 2),
-        "date": date
     }
 
-# -------------------------
-# ANALYST UPGRADES
-# -------------------------
+# ---------------- ANALYST UPGRADES ----------------
 def fetch_analyst_upgrades():
-    if not FMP_API_KEY:
-        return []
+    api_key = os.getenv("FMP_API_KEY")
+    if not api_key:
+        return {}
 
-    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={FMP_API_KEY}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": SEC_UA,
-            "Accept": "application/json"
-        }
-    )
+    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+    data = json.loads(http_get(url).decode())
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read().decode())
-    except Exception:
-        return []
-
-    signals = []
-    for d in data:
-        old = d.get("priceTargetPrior")
-        new = d.get("priceTarget")
-        if not old or not new or new <= old:
+    upgrades = defaultdict(list)
+    for item in data:
+        if not item.get("priceTargetPrior") or not item.get("priceTarget"):
+            continue
+        if item["priceTarget"] <= item["priceTargetPrior"]:
             continue
 
-        pct = (new - old) / old
+        pct = (item["priceTarget"] - item["priceTargetPrior"]) / item["priceTargetPrior"]
         if pct < 0.07:
             continue
 
-        signals.append(
-            f"{d.get('symbol')} — {d.get('analystCompany')}\n"
-            f"{d.get('ratingPrior')} → {d.get('ratingCurrent')}\n"
-            f"Target ${old} → ${new} (+{round(pct*100,1)}%)\n"
-        )
+        upgrades[item["symbol"]].append(item)
 
-    return signals[:5]
+    return upgrades
 
-# -------------------------
-# MAIN
-# -------------------------
+# ---------------- CONVICTION SCORE ----------------
+def conviction_score(hit, cluster, analyst):
+    score = 0
+    score += min(hit["total"] / 10000, 30)
+    if "CEO" in hit["role"]:
+        score += 25
+    elif "CFO" in hit["role"]:
+        score += 18
+    else:
+        score += 10
+    score += min(cluster * 10, 20)
+    if analyst:
+        score += 15
+    return min(int(score), 100)
+
+# ---------------- MAIN ----------------
 def main():
-    feed_url = (
-        "https://www.sec.gov/cgi-bin/browse-edgar"
-        "?action=getcurrent&type=4&owner=only&count=100&output=atom"
-    )
-
-    atom = http_get(feed_url).decode("utf-8", "ignore")
-    feed = ET.fromstring(atom)
+    rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&output=atom"
+    feed = ET.fromstring(http_get(rss))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
-    cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
+    now = dt.datetime.utcnow()
+    cutoff = now - dt.timedelta(hours=LOOKBACK_HOURS)
 
     hits = []
 
@@ -211,14 +176,12 @@ def main():
         if not updated:
             continue
 
-        updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
+        updated_dt = dt.datetime.fromisoformat(updated.replace("Z","+00:00")).replace(tzinfo=None)
         if updated_dt < cutoff:
             continue
 
-        link = next(
-            (l.get("href") for l in entry.findall("atom:link", ns) if l.get("rel") == "alternate"),
-            None
-        )
+        link = next((l.get("href") for l in entry.findall("atom:link", ns)
+                     if l.get("rel") == "alternate"), None)
         if not link:
             continue
 
@@ -226,52 +189,60 @@ def main():
         xml_url = next(
             (line[line.find("https://"):line.find(".xml")+4]
              for line in page.splitlines()
-             if ".xml" in line and "form4" in line.lower()),
+             if ".xml" in line.lower() and "form4" in line.lower()),
             None
         )
         if not xml_url:
             continue
 
         parsed = parse_form4(http_get(xml_url))
-        if not parsed or parsed["total"] < 25_000:
+        if not parsed:
             continue
 
         hits.append(parsed)
 
-    # -------------------------
-    # CLUSTER BUY DETECTION
-    # -------------------------
-    groups = defaultdict(list)
+    analyst_map = fetch_analyst_upgrades()
+    grouped = defaultdict(list)
     for h in hits:
-        groups[h["ticker"]].append(h)
+        grouped[h["ticker"]].append(h)
 
     body = ""
 
-    clusters = {k: v for k, v in groups.items() if len(v) >= 2}
+    # ---- HIGH CONVICTION ----
+    body += "<div class='card'><div class='section-title'>🔥 High-Conviction Signals</div>"
+    for ticker, g in grouped.items():
+        large = [h for h in g if h["total"] >= 25000]
+        if not large:
+            continue
+        score = conviction_score(large[0], len(large), ticker in analyst_map)
+        body += f"<p><b>{ticker}</b> — Conviction <span class='score'>{score}</span></p>"
+        for h in large:
+            body += f"<div class='small'>• {h['owner']} ({h['role']}) bought ${h['total']:,.0f}</div>"
+        body += "<br>"
+    body += "</div>"
 
-    if clusters:
-        body += "🔥 CLUSTER INSIDER BUYING\n\n"
-        for ticker, items in clusters.items():
-            total = sum(i["total"] for i in items)
-            body += f"{ticker} — {len(items)} buys (${total:,.0f})\n"
-            for i in items:
-                body += f"  • {i['owner']} ({i['role']}) bought ${i['total']:,.0f} on {i['date']}\n"
-            body += "-" * 30 + "\n"
-    else:
-        body += f"No notable insider buying activity in the last {LOOKBACK_HOURS} hours.\n"
+    # ---- SOFT SIGNALS ----
+    body += "<div class='card'><div class='section-title'>🟡 Notable Insider Activity (Smaller Buys)</div>"
+    for ticker, g in grouped.items():
+        soft = [h for h in g if 5000 <= h["total"] < 25000]
+        for h in soft:
+            body += f"<div class='small soft'>• {ticker} — {h['owner']} bought ${h['total']:,.0f}</div>"
+    body += "</div>"
 
-    # -------------------------
-    # ANALYST SECTION
-    # -------------------------
-    analyst = fetch_analyst_upgrades()
-    body += "\n📊 ANALYST UPGRADES\n\n"
-    if analyst:
-        body += "\n".join(analyst)
-    else:
-        body += "No significant analyst upgrades today."
+    # ---- CONFLUENCE ----
+    body += "<div class='card'><div class='section-title'>🔗 Insider + Analyst Confluence</div>"
+    for ticker in grouped:
+        if ticker in analyst_map:
+            body += f"<div class='small'><b>{ticker}</b> — Insider buying + analyst upgrades</div>"
+    body += "</div>"
+
+    if not hits:
+        body = """<div class="card">
+        <div class="section-title">No Major Insider Activity</div>
+        <div class="small">Markets are quiet — monitoring continues.</div>
+        </div>"""
 
     write_html(body)
 
-# -------------------------
 if __name__ == "__main__":
     main()
