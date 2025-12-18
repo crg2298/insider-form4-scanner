@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import json
 import smtplib
 import ssl
 import urllib.request
@@ -121,8 +122,6 @@ def parse_form4_xml(xml_bytes: bytes):
     }
     
     def fetch_analyst_upgrades(api_key):
-        import json, urllib.request
-
         url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
         with urllib.request.urlopen(url) as response:
             data = json.loads(response.read().decode())
