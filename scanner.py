@@ -158,7 +158,7 @@ def fetch_analyst_upgrades(api_key):
             continue
 
         pct_change = (new_target - old_target) / old_target
-        if pct_change < 0.10:
+        if pct_change < 0.07:
             continue
 
         signals.append({
@@ -235,8 +235,8 @@ def main():
         if not parsed:
             continue
             
-        # Minimum purchase threshold: $50,000
-        if not parsed.get("total_dollars") or parsed["total_dollars"] < 50_000:
+        # Minimum purchase threshold: $25,000
+        if not parsed.get("total_dollars") or parsed["total_dollars"] < 25_000:
             continue
 
 
