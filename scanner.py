@@ -119,6 +119,52 @@ def parse_form4_xml(xml_bytes: bytes):
         "transactions": transactions,
         "total_dollars": round(sum(t["dollars"] for t in transactions), 2),
     }
+    
+    def fetch_analyst_upgrades(api_key):
+        import json, urllib.request
+
+        url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+
+        signals = []
+
+        for item in data:
+            old_rating = (item.get("ratingPrior") or "").lower()
+            new_rating = (item.get("ratingCurrent") or "").lower()
+
+            old_target = item.get("priceTargetPrior")
+            new_target = item.get("priceTarget")
+
+            # Require upgrade + raised target
+            if not old_target or not new_target:
+                continue
+            if new_target <= old_target:
+                continue
+            if old_rating == new_rating:
+                continue
+            if old_target == 0:
+                continue
+
+            pct_change = (new_target - old_target) / old_target
+
+            # Require meaningful raise (10%+)
+            if pct_change < 0.10:
+                continue
+
+            signals.append({
+                "symbol": item.get("symbol"),
+                "analyst": item.get("analystCompany"),
+                "old_rating": item.get("ratingPrior"),
+                "new_rating": item.get("ratingCurrent"),
+                "old_target": old_target,
+                "new_target": new_target,
+                "pct": round(pct_change * 100, 1),
+                "date": item.get("publishedDate", "")[:10]
+            })
+
+        return signals
+
 
 def main():
 
@@ -130,6 +176,7 @@ def main():
     cutoff = now - dt.timedelta(hours=LOOKBACK_HOURS)
     body_lines = []
     subject = "Daily Insider Activity Update"
+    analyst_signals = fetch_analyst_upgrades(os.environ.get("FMP_API_KEY"))
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", default="", namespaces=ns)
@@ -188,8 +235,24 @@ def main():
         body = "No notable insider buying activity found in the last 24 hours."
     else:
         body = "\n".join(body_lines)
+    analyst_lines = []
 
-    write_daily_update_html(body, "docs/index.html")
+    if analyst_signals:
+        analyst_lines.append("📊 Analyst Upgrades (Strong Signals)\n")
+        for a in analyst_signals[:5]:  # limit to top 5
+            analyst_lines.append(
+                f"{a['symbol']} — {a['analyst']}\n"
+                f"{a['old_rating']} → {a['new_rating']}\n"
+                f"Target: ${a['old_target']} → ${a['new_target']} (+{a['pct']}%)\n"
+                f"Date: {a['date']}\n"
+                "-----------------------------"
+            )
+    else:
+        analyst_lines.append("No significant analyst upgrades today.")
+
+    final_body = body + "\n\n" + "\n".join(analyst_lines)
+    write_daily_update_html(final_body, "docs/index.html")
+
 
     # OPTIONAL EMAIL (leave commented if not needed)
     # send_email(subject, body)
