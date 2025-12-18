@@ -121,7 +121,7 @@ def parse_form4_xml(xml_bytes: bytes):
         "total_dollars": round(sum(t["dollars"] for t in transactions), 2),
     }
     
-    def fetch_analyst_upgrades(api_key):
+def fetch_analyst_upgrades(api_key):
         url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
         with urllib.request.urlopen(url) as response:
             data = json.loads(response.read().decode())
