@@ -22,7 +22,7 @@ jobs:
       - name: Run scanner
         env:
           SEC_USER_AGENT: "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-          LOOKBACK_HOURS: "24"
+          LOOKBACK_HOURS: "72"
 
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
