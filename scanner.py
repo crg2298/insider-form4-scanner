@@ -9,6 +9,7 @@ from collections import defaultdict
 # CONFIG
 # =========================
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
+
 SEC_UA = os.getenv(
     "SEC_USER_AGENT",
     "Form4Scanner/1.0 (contact: your_email@example.com)"
@@ -113,6 +114,7 @@ def fetch_analyst_upgrades(api_key):
     for item in data:
         old_t = item.get("priceTargetPrior")
         new_t = item.get("priceTarget")
+
         if not old_t or not new_t or new_t <= old_t:
             continue
 
@@ -122,6 +124,7 @@ def fetch_analyst_upgrades(api_key):
 
         signals.append({
             "symbol": item.get("symbol"),
+            "analyst": item.get("analystCompany"),
             "old": old_t,
             "new": new_t,
             "pct": round(pct * 100, 1)
@@ -176,7 +179,9 @@ def main():
 
         insider_hits.append(parsed)
 
-    # ---------- CLUSTER BUY DETECTION ----------
+    # =========================
+    # PHASE 1 — CLUSTER BUYS
+    # =========================
     groups = defaultdict(list)
     for hit in insider_hits:
         groups[hit["ticker"]].append(hit)
@@ -194,34 +199,56 @@ def main():
                 )
             body_lines.append("-" * 30 + "\n")
 
-    # ---------- ANALYST SECTION (ALWAYS SHOWN) ----------
-    analyst_lines = []
+    # =========================
+    # PHASE 2 — INSIDER + ANALYST CONFLUENCE
+    # =========================
     api_key = os.getenv("FMP_API_KEY")
+    analyst_signals = fetch_analyst_upgrades(api_key) if api_key else []
 
-    analyst_lines.append("\n📊 Analyst Upgrades (Last 24–72 Hours)\n")
+    analyst_by_symbol = {a["symbol"]: a for a in analyst_signals}
 
-    if api_key:
-        signals = fetch_analyst_upgrades(api_key)
-        print("Analyst signals found:", len(signals))
+    confluence = [
+        h for h in insider_hits
+        if h["ticker"] in analyst_by_symbol
+    ]
 
-        if signals:
-            for s in signals[:5]:
-                analyst_lines.append(
-                    f"{s['symbol']} — Target ${s['old']} → ${s['new']} (+{s['pct']}%)\n"
-                )
-        else:
-            analyst_lines.append("No strong analyst upgrades detected.\n")
+    if confluence:
+        body_lines.append("\n🚀 HIGH-CONVICTION SIGNALS (Insiders + Analysts)\n")
+
+        for h in confluence:
+            a = analyst_by_symbol[h["ticker"]]
+            body_lines.append(
+                f"{h['ticker']} — Insider buy + Analyst upgrade\n"
+                f"Insider: {h['owner']} (${h['total_dollars']:,.0f})\n"
+                f"Analyst: Target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
+                "-----------------------------\n"
+            )
+
+    # =========================
+    # ANALYST SECTION (ALWAYS)
+    # =========================
+    body_lines.append("\n📊 Analyst Upgrades\n")
+
+    if analyst_signals:
+        for a in analyst_signals[:5]:
+            body_lines.append(
+                f"{a['symbol']} — {a['analyst']}\n"
+                f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)\n"
+                "-----------------------------\n"
+            )
     else:
-        analyst_lines.append("Analyst data unavailable (API key missing).\n")
+        body_lines.append("No strong analyst upgrades detected.\n")
 
-    # ---------- FINAL OUTPUT ----------
-    if not body_lines:
-        body_lines.append(
+    # =========================
+    # FINAL OUTPUT
+    # =========================
+    if not insider_hits:
+        body_lines.insert(
+            0,
             f"No notable insider buying activity found in the last {LOOKBACK_HOURS} hours.\n"
         )
 
-    final_body = "\n".join(body_lines + analyst_lines)
-    write_daily_update_html(final_body)
+    write_daily_update_html("".join(body_lines))
 
 if __name__ == "__main__":
     main()
