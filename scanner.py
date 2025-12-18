@@ -249,7 +249,7 @@ def main():
         )
         
     if not body_lines:
-        body = "No notable insider buying activity found in the last 24 hours."
+        body = "No notable insider buying activity found in the last {LOOKBACK_HOURS} hours."
     else:
         body = "\n".join(body_lines)
     analyst_lines = []
