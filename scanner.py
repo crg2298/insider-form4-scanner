@@ -5,20 +5,22 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
-# ======================
-# CONFIG
-# ======================
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
+# =========================
+# CONFIG (STRIPPED SAFELY)
+# =========================
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72").strip())
+
 SEC_UA = os.getenv(
     "SEC_USER_AGENT",
     "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-)
+).strip()
 
-# ======================
+FMP_API_KEY = os.getenv("FMP_API_KEY", "").strip()
+
+# =========================
 # HTTP HELPERS
-# ======================
+# =========================
 def http_get_sec(url: str) -> bytes:
-    """ONLY for sec.gov"""
     req = urllib.request.Request(
         url,
         headers={"User-Agent": SEC_UA}
@@ -28,7 +30,6 @@ def http_get_sec(url: str) -> bytes:
 
 
 def http_get_fmp(url: str) -> bytes:
-    """ONLY for Financial Modeling Prep"""
     req = urllib.request.Request(
         url,
         headers={
@@ -39,20 +40,22 @@ def http_get_fmp(url: str) -> bytes:
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
-# ======================
+# =========================
 # FORM 4 PARSER
-# ======================
+# =========================
 def parse_form4_xml(xml_bytes: bytes):
     root = ET.fromstring(xml_bytes)
 
     issuer = root.find("issuer")
-    ticker = issuer.findtext("issuerTradingSymbol", default="")
+    ticker = issuer.findtext("issuerTradingSymbol", default="").strip()
 
     owner = root.find("reportingOwner")
-    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", default="Unknown")
+    owner_name = owner.find("reportingOwnerId").findtext(
+        "rptOwnerName", default="Unknown"
+    ).strip()
 
     rel = owner.find("reportingOwnerRelationship")
-    role = rel.findtext("officerTitle", default="Insider")
+    role = rel.findtext("officerTitle", default="Insider").strip()
 
     nd_table = root.find("nonDerivativeTable")
     if nd_table is None:
@@ -62,11 +65,11 @@ def parse_form4_xml(xml_bytes: bytes):
     dates = []
 
     for tx in nd_table.findall("nonDerivativeTransaction"):
-        code = tx.find("transactionCoding").findtext("transactionCode", "")
+        code = tx.findtext("transactionCoding/transactionCode", "")
         if code != "P":
             continue
 
-        date = tx.find("transactionDate").findtext("value", "")
+        date = tx.findtext("transactionDate/value", "")
         shares = float(tx.findtext("transactionAmounts/transactionShares/value", "0") or 0)
         price = float(tx.findtext("transactionAmounts/transactionPricePerShare/value", "0") or 0)
 
@@ -84,11 +87,14 @@ def parse_form4_xml(xml_bytes: bytes):
         "date": max(dates) if dates else ""
     }
 
-# ======================
+# =========================
 # ANALYST UPGRADES (FMP)
-# ======================
-def fetch_analyst_upgrades(api_key: str):
-    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+# =========================
+def fetch_analyst_upgrades():
+    if not FMP_API_KEY:
+        return []
+
+    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={FMP_API_KEY}"
 
     try:
         raw = http_get_fmp(url)
@@ -120,9 +126,9 @@ def fetch_analyst_upgrades(api_key: str):
 
     return signals
 
-# ======================
+# =========================
 # MAIN
-# ======================
+# =========================
 def main():
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
     feed = ET.fromstring(http_get_sec(rss))
@@ -136,7 +142,10 @@ def main():
         if not updated:
             continue
 
-        updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
+        updated_dt = dt.datetime.fromisoformat(
+            updated.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+
         if updated_dt < cutoff:
             continue
 
@@ -149,6 +158,7 @@ def main():
 
         filing_page = http_get_sec(link).decode(errors="ignore")
         xml_url = None
+
         for line in filing_page.splitlines():
             if ".xml" in line and "form4" in line.lower():
                 start = line.find("https://")
@@ -177,20 +187,19 @@ def main():
         total = sum(h["total_dollars"] for h in hits)
         body.append(f"🔥 {ticker} — {len(hits)} insider buys (${total:,.0f})")
         for h in hits:
-            body.append(f"• {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f} on {h['date']}")
+            body.append(
+                f"• {h['owner']} ({h['role']}) bought ${h['total_dollars']:,.0f} on {h['date']}"
+            )
         body.append("")
 
-    # Analyst upgrades
-    api_key = os.getenv("FMP_API_KEY")
-    if api_key:
-        upgrades = fetch_analyst_upgrades(api_key)
-        if upgrades:
-            body.append("📊 Analyst Upgrades")
-            for a in upgrades[:5]:
-                body.append(
-                    f"{a['symbol']} — {a['analyst']} "
-                    f"${a['old']} → ${a['new']} (+{a['pct']}%)"
-                )
+    upgrades = fetch_analyst_upgrades()
+    if upgrades:
+        body.append("📊 Analyst Upgrades")
+        for a in upgrades[:5]:
+            body.append(
+                f"{a['symbol']} — {a['analyst']} "
+                f"${a['old']} → ${a['new']} (+{a['pct']}%)"
+            )
 
     if not body:
         body.append(f"No notable insider buying activity in the last {LOOKBACK_HOURS} hours.")
