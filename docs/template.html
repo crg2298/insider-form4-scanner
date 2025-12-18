@@ -1,87 +1,70 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
   <title>{{TITLE}}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <style>
-    :root{
-      --bg:#0b1220; --card:#0f1a2e; --text:#e8eefc; --muted:#a7b3cc;
-      --accent:#4f8cff; --border:rgba(255,255,255,.08);
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
     }
-    body{
-      margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      background: radial-gradient(1200px 600px at 20% 0%, #162344 0%, var(--bg) 55%);
-      color:var(--text); line-height:1.5;
+
+    .container {
+      max-width: 900px;
+      margin: auto;
+      padding: 40px 20px;
     }
-    .wrap{max-width:960px; margin:40px auto; padding:0 16px;}
-    .top{display:flex; gap:14px; align-items:center; margin-bottom:18px;}
-    .badge{
-      width:40px; height:40px; border-radius:12px;
-      background: linear-gradient(135deg, #2b5cff, #5fe1ff);
-      box-shadow: 0 12px 30px rgba(79,140,255,.25);
+
+    h1 {
+      font-size: 2.6rem;
+      margin-bottom: 8px;
     }
-    h1{font-size:28px; margin:0;}
-    .sub{color:var(--muted); margin:4px 0 0; font-size:14px;}
-    .card{
-      background: rgba(15,26,46,.82);
-      border:1px solid var(--border);
-      border-radius:18px;
-      box-shadow: 0 20px 60px rgba(0,0,0,.35);
-      overflow:hidden;
+
+    .subtitle {
+      font-size: 1.2rem;
+      color: #cbd5f5;
+      margin-bottom: 20px;
     }
-    .meta{
-      display:flex; flex-wrap:wrap; gap:10px;
-      padding:14px 18px;
-      border-bottom:1px solid var(--border);
-      color:var(--muted); font-size:13px;
-      backdrop-filter: blur(6px);
+
+    .updated {
+      color: #94a3b8;
+      font-style: italic;
+      margin-bottom: 30px;
     }
-    .pill{
-      padding:6px 10px; border:1px solid var(--border);
-      border-radius:999px; background: rgba(255,255,255,.03);
+
+    pre {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 20px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      font-size: 0.95rem;
     }
-    .content{padding:18px;}
-    .content pre{
-      margin:0;
-      white-space:pre-wrap;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size:13.5px;
-      background: rgba(0,0,0,.25);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:14px;
-      color:var(--text);
+
+    footer {
+      margin-top: 40px;
+      text-align: center;
+      color: #64748b;
+      font-size: 0.85rem;
     }
-    a{color:var(--accent); text-decoration:none;}
-    a:hover{text-decoration:underline;}
-    .footer{color:var(--muted); font-size:12px; margin-top:14px; text-align:center;}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <div class="badge"></div>
-      <div>
-        <h1>{{H1}}</h1>
-        <div class="sub">{{SUBTITLE}}</div>
-      </div>
-    </div>
+  <div class="container">
+    <h1>{{H1}}</h1>
+    <div class="subtitle">{{SUBTITLE}}</div>
+    <div class="updated">Updated {{UPDATED}}</div>
 
-    <div class="card">
-      <div class="meta">
-        <div class="pill">Updated: {{UPDATED}}</div>
-        <div class="pill">Window: last {{HOURS}} hours</div>
-        <div class="pill">Source: SEC Form 4</div>
-      </div>
-      <div class="content">
-        <pre>{{BODY}}</pre>
-      </div>
-    </div>
+    <pre>{{BODY}}</pre>
 
-    <div class="footer">
-      Not financial advice. Data can be delayed/incorrect — verify filings.
-    </div>
+    <footer>
+      SEC Form 4 filings · Financial Modeling Prep · Automated daily
+    </footer>
   </div>
 </body>
 </html>
