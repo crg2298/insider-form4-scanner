@@ -5,33 +5,30 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
+# ================= CONFIG =================
+
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 
-SEC_UA = os.getenv(
-    "SEC_USER_AGENT",
-    "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-)
+# HARDCODED — DO NOT USE ENV FOR UA
+SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
-# ------------------ HTTP ------------------
+# ================= HTTP ===================
 
 def http_get(url: str) -> bytes:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": SEC_UA,
-            "Accept": "*/*"
-        }
-    )
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", SEC_USER_AGENT)
+    req.add_header("Accept", "*/*")
+
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
-# ------------------ HTML OUTPUT ------------------
+# ================= HTML ===================
 
-def write_daily_update_html(body_html: str, out_path="docs/index.html"):
+def write_daily_update_html(body_html: str):
     with open("docs/template.html", "r", encoding="utf-8") as f:
         tpl = f.read()
 
-    now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
@@ -40,24 +37,24 @@ def write_daily_update_html(body_html: str, out_path="docs/index.html"):
                "{{SUBTITLE}}",
                f"Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours"
            )
-           .replace("{{UPDATED}}", now_utc)
+           .replace("{{UPDATED}}", now)
            .replace("{{BODY}}", body_html)
     )
 
     os.makedirs("docs", exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-# ------------------ FORM 4 PARSER ------------------
+# ================= FORM 4 =================
 
-def parse_form4_xml(xml_bytes):
+def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
 
     issuer = root.find("issuer")
     ticker = issuer.findtext("issuerTradingSymbol", "") if issuer is not None else ""
 
     owner = root.find("reportingOwner")
-    name = owner.find("reportingOwnerId").findtext("rptOwnerName", "Unknown")
+    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", "Unknown")
 
     role = "Insider"
     rel = owner.find("reportingOwnerRelationship")
@@ -97,13 +94,13 @@ def parse_form4_xml(xml_bytes):
 
     return {
         "ticker": ticker,
-        "owner": name,
+        "owner": owner_name,
         "role": role,
         "total": round(total, 2),
         "date": date
     }
 
-# ------------------ ANALYST UPGRADES ------------------
+# ================= ANALYSTS =================
 
 def fetch_analyst_upgrades():
     api_key = os.getenv("FMP_API_KEY")
@@ -117,7 +114,7 @@ def fetch_analyst_upgrades():
     except:
         return []
 
-    signals = []
+    results = []
     for item in data:
         old = item.get("priceTargetPrior")
         new = item.get("priceTarget")
@@ -128,18 +125,17 @@ def fetch_analyst_upgrades():
         if pct < 0.07:
             continue
 
-        signals.append({
+        results.append({
             "symbol": item.get("symbol"),
             "analyst": item.get("analystCompany"),
             "old": old,
             "new": new,
-            "pct": round(pct * 100, 1),
-            "date": item.get("publishedDate", "")[:10]
+            "pct": round(pct * 100, 1)
         })
 
-    return signals[:5]
+    return results[:5]
 
-# ------------------ MAIN ------------------
+# ================= MAIN ===================
 
 def main():
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
@@ -179,15 +175,13 @@ def main():
         if not xml_url:
             continue
 
-        parsed = parse_form4_xml(http_get(xml_url))
+        parsed = parse_form4(http_get(xml_url))
         if not parsed or parsed["total"] < 15000:
             continue
 
         hits.append(parsed)
 
-    # ------------------ HTML BUILD ------------------
-
-    body_blocks = []
+    blocks = []
 
     if hits:
         grouped = defaultdict(list)
@@ -197,53 +191,44 @@ def main():
         for ticker, items in grouped.items():
             total = sum(i["total"] for i in items)
 
-            body_blocks.append(f"""
+            blocks.append(f"""
             <div class="card">
               <div class="section-title">🔥 Insider Buying — {ticker}</div>
               <div class="item muted">{len(items)} insiders · ${total:,.0f}</div>
             """)
 
             for i in items:
-                body_blocks.append(
+                blocks.append(
                     f"<div class='item'>• {i['owner']} ({i['role']}) — ${i['total']:,.0f} on {i['date']}</div>"
                 )
 
-            body_blocks.append("</div>")
-
+            blocks.append("</div>")
     else:
-        body_blocks.append("""
+        blocks.append("""
         <div class="card">
           <div class="section-title">Market Status</div>
-          <div class="empty">
-            No high-confidence insider buying detected.<br>
-            Monitoring continues.
-          </div>
+          <div class="empty">No high-confidence insider buying detected.</div>
         </div>
         """)
 
-    # ------------------ ANALYST SECTION ------------------
-
+    # Analysts always visible
     analysts = fetch_analyst_upgrades()
-
-    body_blocks.append("""
-    <div class="card">
-      <div class="section-title">📊 Analyst Upgrades</div>
-    """)
+    blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
 
     if analysts:
         for a in analysts:
-            body_blocks.append(
+            blocks.append(
                 f"<div class='item'><strong>{a['symbol']}</strong> — {a['analyst']}<br>"
                 f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)</div>"
             )
     else:
-        body_blocks.append("<div class='empty'>No strong upgrades today.</div>")
+        blocks.append("<div class='empty'>No strong upgrades today.</div>")
 
-    body_blocks.append("</div>")
+    blocks.append("</div>")
 
-    write_daily_update_html("\n".join(body_blocks))
+    write_daily_update_html("\n".join(blocks))
 
-# ------------------ RUN ------------------
+# ================= RUN ====================
 
 if __name__ == "__main__":
     main()
