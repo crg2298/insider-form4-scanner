@@ -38,7 +38,7 @@ def write_daily_update_html(body_html: str):
            .replace("{{H1}}", "Daily Insider Log")
            .replace(
                "{{SUBTITLE}}",
-               f"Insider buying & analyst conviction — last {LOOKBACK_HOURS} hours"
+               f"Insider buying, analyst conviction & market signals — last {LOOKBACK_HOURS} hours"
            )
            .replace("{{UPDATED}}", now_et)
            .replace("{{HOURS}}", str(LOOKBACK_HOURS))
@@ -48,6 +48,24 @@ def write_daily_update_html(body_html: str):
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
+
+# ================= HELPERS =================
+
+def infer_sector(ticker: str) -> str:
+    if not ticker:
+        return "Unknown"
+    t = ticker.upper()
+
+    if t.startswith(("XOM", "CVX", "BP", "COP")):
+        return "Energy"
+    if t.startswith(("MRNA", "BIIB", "PFE", "JNJ")):
+        return "Biotech / Pharma"
+    if t.startswith(("AAPL", "MSFT", "NVDA", "AMD", "GOOG")):
+        return "Technology"
+    if t.startswith(("JPM", "BAC", "GS", "WFC")):
+        return "Financials"
+
+    return "Other"
 
 # ================= FORM 4 =================
 
@@ -139,6 +157,42 @@ def fetch_analyst_upgrades():
 
     return results[:5]
 
+# ================= META SIGNALS =================
+
+def meta_signal_block(insider_count, sector_counts, analyst_count):
+    if insider_count >= 5:
+        insider_trend = "Insider activity is accelerating across multiple names."
+    elif insider_count >= 2:
+        insider_trend = "Selective insider buying is emerging."
+    else:
+        insider_trend = "Insider activity remains muted market-wide."
+
+    top_sector = max(sector_counts, key=sector_counts.get) if sector_counts else None
+    sector_line = (
+        f"Most insider activity is concentrated in {top_sector}."
+        if top_sector and top_sector != "Other"
+        else "Insider activity is dispersed across sectors."
+    )
+
+    analyst_line = (
+        "Analyst conviction is increasing through aggressive price target revisions."
+        if analyst_count >= 3
+        else "Analyst activity remains selective across coverage."
+    )
+
+    return f"""
+    <div class="card">
+      <div class="section-title">🌐 Market Meta-Signals</div>
+      <div class="item">{insider_trend}</div>
+      <div class="item">{sector_line}</div>
+      <div class="item">{analyst_line}</div>
+      <div class="item muted">
+        Meta-signals highlight behavioral shifts across the market rather than
+        isolated company events, often preceding broader regime changes.
+      </div>
+    </div>
+    """
+
 # ================= SNAPSHOT =================
 
 def daily_market_snapshot(hits, analysts):
@@ -176,6 +230,7 @@ def main():
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
     hits = []
+    sector_counts = defaultdict(int)
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -210,6 +265,7 @@ def main():
         parsed = parse_form4(http_get(xml_url))
         if parsed:
             hits.append(parsed)
+            sector_counts[infer_sector(parsed["ticker"])] += 1
 
     blocks = []
 
@@ -235,9 +291,8 @@ def main():
 
             blocks.append("</div>")
 
-    # ===== ANALYST UPGRADES (ALWAYS) =====
+    # ===== ANALYST UPGRADES =====
     analysts = fetch_analyst_upgrades()
-
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
 
     if analysts:
@@ -251,7 +306,10 @@ def main():
 
     blocks.append("</div>")
 
-    # ===== DAILY SNAPSHOT (ALWAYS) =====
+    # ===== META SIGNALS =====
+    blocks.append(meta_signal_block(len(hits), sector_counts, len(analysts)))
+
+    # ===== DAILY SNAPSHOT =====
     blocks.append(daily_market_snapshot(hits, analysts))
 
     write_daily_update_html("\n".join(blocks))
