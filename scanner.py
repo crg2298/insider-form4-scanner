@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
+# Toggle paid features
+PAID_MODE = os.getenv("PAID_MODE", "false").lower() == "true"
+
+QUIET_STREAK_FILE = "docs/quiet_streak.json"
+
 # ================= HTTP ===================
 
 def http_get(url: str) -> bytes:
@@ -66,6 +71,30 @@ def infer_sector(ticker: str) -> str:
         return "Financials"
 
     return "Other"
+
+# ================= SIGNAL SCORING =================
+
+def signal_strength(insider_count, total_dollars, analyst_count):
+    score = 0
+    score += min(insider_count * 2, 4)
+    score += min(total_dollars / 250_000, 4)
+    score += min(analyst_count, 2)
+    return round(min(score, 10), 1)
+
+# ================= QUIET STREAK =================
+
+def load_quiet_streak():
+    if not os.path.exists(QUIET_STREAK_FILE):
+        return 0
+    try:
+        with open(QUIET_STREAK_FILE, "r") as f:
+            return json.load(f).get("days", 0)
+    except:
+        return 0
+
+def save_quiet_streak(days):
+    with open(QUIET_STREAK_FILE, "w") as f:
+        json.dump({"days": days}, f)
 
 # ================= FORM 4 =================
 
@@ -157,70 +186,6 @@ def fetch_analyst_upgrades():
 
     return results[:5]
 
-# ================= META SIGNALS =================
-
-def meta_signal_block(insider_count, sector_counts, analyst_count):
-    if insider_count >= 5:
-        insider_trend = "Insider activity is accelerating across multiple names."
-    elif insider_count >= 2:
-        insider_trend = "Selective insider buying is emerging."
-    else:
-        insider_trend = "Insider activity remains muted market-wide."
-
-    top_sector = max(sector_counts, key=sector_counts.get) if sector_counts else None
-    sector_line = (
-        f"Most insider activity is concentrated in {top_sector}."
-        if top_sector and top_sector != "Other"
-        else "Insider activity is dispersed across sectors."
-    )
-
-    analyst_line = (
-        "Analyst conviction is increasing through aggressive price target revisions."
-        if analyst_count >= 3
-        else "Analyst activity remains selective across coverage."
-    )
-
-    return f"""
-    <div class="card">
-      <div class="section-title">🌐 Market Meta-Signals</div>
-      <div class="item">{insider_trend}</div>
-      <div class="item">{sector_line}</div>
-      <div class="item">{analyst_line}</div>
-      <div class="item muted">
-        Meta-signals highlight behavioral shifts across the market rather than
-        isolated company events, often preceding broader regime changes.
-      </div>
-    </div>
-    """
-
-# ================= SNAPSHOT =================
-
-def daily_market_snapshot(hits, analysts):
-    insider_state = (
-        "Insider participation is elevated, suggesting growing internal conviction."
-        if hits else
-        "Insider activity remains subdued, indicating a wait-and-see posture."
-    )
-
-    analyst_state = (
-        "Analyst sentiment shows selective optimism through price target increases."
-        if analysts else
-        "Analyst revisions are muted, signaling stable consensus expectations."
-    )
-
-    return f"""
-    <div class="card">
-      <div class="section-title">🧠 Daily Market Intelligence</div>
-      <div class="item">{insider_state}</div>
-      <div class="item">{analyst_state}</div>
-      <div class="item muted">
-        Quiet periods often precede volatility expansion. Monitoring insider behavior
-        and analyst conviction during these windows can surface early inflection points
-        before price momentum becomes obvious.
-      </div>
-    </div>
-    """
-
 # ================= MAIN ===================
 
 def main():
@@ -231,6 +196,7 @@ def main():
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
     hits = []
     sector_counts = defaultdict(int)
+    total_dollars = 0
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -265,52 +231,55 @@ def main():
         parsed = parse_form4(http_get(xml_url))
         if parsed:
             hits.append(parsed)
+            total_dollars += parsed["total"]
             sector_counts[infer_sector(parsed["ticker"])] += 1
+
+    analysts = fetch_analyst_upgrades()
+
+    # Quiet streak
+    quiet_days = load_quiet_streak()
+    if hits:
+        quiet_days = 0
+    else:
+        quiet_days += 1
+    save_quiet_streak(quiet_days)
+
+    strength = signal_strength(len(hits), total_dollars, len(analysts))
 
     blocks = []
 
-    # ===== INSIDER BUYING =====
-    if hits:
-        grouped = defaultdict(list)
-        for h in hits:
-            grouped[h["ticker"]].append(h)
+    blocks.append(f"""
+    <div class="card">
+      <div class="section-title">📈 Signal Strength</div>
+      <div class="item">Overall signal score: <strong>{strength} / 10</strong></div>
+      <div class="item muted">Combines insider activity, dollar conviction, and analyst momentum.</div>
+    </div>
+    """)
 
-        for ticker, items in grouped.items():
-            total = sum(i["total"] for i in items)
+    blocks.append(f"""
+    <div class="card">
+      <div class="section-title">⏳ Market Quiet Streak</div>
+      <div class="item">Days without notable insider buying: <strong>{quiet_days}</strong></div>
+    </div>
+    """)
 
-            blocks.append(f"""
-            <div class="card">
-              <div class="section-title">🔥 Insider Buying — {ticker}</div>
-              <div class="item muted">{len(items)} insiders · ${total:,.0f}</div>
-            """)
-
-            for i in items:
-                blocks.append(
-                    f"<div class='item'>• {i['owner']} ({i['role']}) — ${i['total']:,.0f} on {i['date']}</div>"
-                )
-
-            blocks.append("</div>")
-
-    # ===== ANALYST UPGRADES =====
-    analysts = fetch_analyst_upgrades()
-    blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
-
-    if analysts:
-        for a in analysts:
-            blocks.append(
-                f"<div class='item'><strong>{a['symbol']}</strong> — {a['analyst']}<br>"
-                f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)</div>"
-            )
-    else:
-        blocks.append("<div class='empty'>No strong analyst upgrades detected.</div>")
-
+    blocks.append("<div class='card'><div class='section-title'>🧭 Sector Rotation</div>")
+    for sector, count in sorted(sector_counts.items(), key=lambda x: -x[1]):
+        blocks.append(f"<div class='item'>{sector}: {count} insider events</div>")
+    if not sector_counts:
+        blocks.append("<div class='item muted'>No sector concentration detected.</div>")
     blocks.append("</div>")
 
-    # ===== META SIGNALS =====
-    blocks.append(meta_signal_block(len(hits), sector_counts, len(analysts)))
-
-    # ===== DAILY SNAPSHOT =====
-    blocks.append(daily_market_snapshot(hits, analysts))
+    if not PAID_MODE:
+        blocks.append("""
+        <div class="card">
+          <div class="section-title">🔒 Premium Signals</div>
+          <div class="item muted">
+            Detailed ticker-level analysis and historical performance tracking
+            are available to paid subscribers.
+          </div>
+        </div>
+        """)
 
     write_daily_update_html("\n".join(blocks))
 
