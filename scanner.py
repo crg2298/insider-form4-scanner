@@ -4,11 +4,12 @@ import json
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
-
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
 # ================= HTTP ===================
@@ -26,16 +27,21 @@ def write_daily_update_html(body_html: str):
     with open("docs/template.html", "r", encoding="utf-8") as f:
         tpl = f.read()
 
-    now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now_et = (
+        dt.datetime.now(timezone.utc)
+        .astimezone(ZoneInfo("America/New_York"))
+        .strftime("%Y-%m-%d %I:%M %p ET")
+    )
 
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
            .replace("{{H1}}", "Daily Insider Log")
            .replace(
                "{{SUBTITLE}}",
-               f"Rare insider buys & analyst upgrades — last {LOOKBACK_HOURS} hours"
+               f"Insider buying & analyst conviction — last {LOOKBACK_HOURS} hours"
            )
-           .replace("{{UPDATED}}", now)
+           .replace("{{UPDATED}}", now_et)
+           .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", body_html)
     )
 
@@ -87,7 +93,7 @@ def parse_form4(xml_bytes):
 
         total += shares * price
 
-    if total <= 0:
+    if total < 15000:
         return None
 
     return {
@@ -137,15 +143,15 @@ def fetch_analyst_upgrades():
 
 def daily_market_snapshot(hits, analysts):
     insider_state = (
-        "Elevated insider participation detected."
+        "Insider participation is elevated, suggesting growing internal conviction."
         if hits else
-        "Insider activity remains subdued."
+        "Insider activity remains subdued, indicating a wait-and-see posture."
     )
 
     analyst_state = (
-        "Analyst sentiment shows selective optimism."
+        "Analyst sentiment shows selective optimism through price target increases."
         if analysts else
-        "Analyst activity is muted across coverage."
+        "Analyst revisions are muted, signaling stable consensus expectations."
     )
 
     return f"""
@@ -154,8 +160,9 @@ def daily_market_snapshot(hits, analysts):
       <div class="item">{insider_state}</div>
       <div class="item">{analyst_state}</div>
       <div class="item muted">
-        Quiet markets often precede volatility. Monitoring insider behavior and
-        analyst conviction helps identify inflection points before price reacts.
+        Quiet periods often precede volatility expansion. Monitoring insider behavior
+        and analyst conviction during these windows can surface early inflection points
+        before price momentum becomes obvious.
       </div>
     </div>
     """
@@ -201,10 +208,8 @@ def main():
             continue
 
         parsed = parse_form4(http_get(xml_url))
-        if not parsed or parsed["total"] < 15000:
-            continue
-
-        hits.append(parsed)
+        if parsed:
+            hits.append(parsed)
 
     blocks = []
 
@@ -230,7 +235,7 @@ def main():
 
             blocks.append("</div>")
 
-    # ===== ANALYST UPGRADES =====
+    # ===== ANALYST UPGRADES (ALWAYS) =====
     analysts = fetch_analyst_upgrades()
 
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
@@ -242,7 +247,7 @@ def main():
                 f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)</div>"
             )
     else:
-        blocks.append("<div class='empty'>No strong upgrades today.</div>")
+        blocks.append("<div class='empty'>No strong analyst upgrades detected.</div>")
 
     blocks.append("</div>")
 
