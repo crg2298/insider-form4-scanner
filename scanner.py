@@ -9,7 +9,6 @@ from collections import defaultdict
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 
-# HARDCODED — DO NOT USE ENV FOR UA
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
 # ================= HTTP ===================
@@ -18,7 +17,6 @@ def http_get(url: str) -> bytes:
     req = urllib.request.Request(url)
     req.add_header("User-Agent", SEC_USER_AGENT)
     req.add_header("Accept", "*/*")
-
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
 
@@ -135,6 +133,33 @@ def fetch_analyst_upgrades():
 
     return results[:5]
 
+# ================= SNAPSHOT =================
+
+def daily_market_snapshot(hits, analysts):
+    insider_state = (
+        "Elevated insider participation detected."
+        if hits else
+        "Insider activity remains subdued."
+    )
+
+    analyst_state = (
+        "Analyst sentiment shows selective optimism."
+        if analysts else
+        "Analyst activity is muted across coverage."
+    )
+
+    return f"""
+    <div class="card">
+      <div class="section-title">🧠 Daily Market Intelligence</div>
+      <div class="item">{insider_state}</div>
+      <div class="item">{analyst_state}</div>
+      <div class="item muted">
+        Quiet markets often precede volatility. Monitoring insider behavior and
+        analyst conviction helps identify inflection points before price reacts.
+      </div>
+    </div>
+    """
+
 # ================= MAIN ===================
 
 def main():
@@ -183,6 +208,7 @@ def main():
 
     blocks = []
 
+    # ===== INSIDER BUYING =====
     if hits:
         grouped = defaultdict(list)
         for h in hits:
@@ -203,16 +229,10 @@ def main():
                 )
 
             blocks.append("</div>")
-    else:
-        blocks.append("""
-        <div class="card">
-          <div class="section-title">Market Status</div>
-          <div class="empty">No high-confidence insider buying detected.</div>
-        </div>
-        """)
 
-    # Analysts always visible
+    # ===== ANALYST UPGRADES =====
     analysts = fetch_analyst_upgrades()
+
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
 
     if analysts:
@@ -225,6 +245,9 @@ def main():
         blocks.append("<div class='empty'>No strong upgrades today.</div>")
 
     blocks.append("</div>")
+
+    # ===== DAILY SNAPSHOT (ALWAYS) =====
+    blocks.append(daily_market_snapshot(hits, analysts))
 
     write_daily_update_html("\n".join(blocks))
 
