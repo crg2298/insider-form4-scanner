@@ -1,11 +1,12 @@
-name: Daily Form 4 Scanner
+name: Hourly Insider & Analyst Scanner
 
 permissions:
   contents: write
 
 on:
   schedule:
-    - cron: "30 12 * * *" # 12:30 UTC = 7:30am ET
+    # Runs at the top of every hour (UTC)
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -13,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,30 +24,19 @@ jobs:
 
       - name: Run scanner
         env:
-          # REQUIRED — SEC compliance
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-
-          # Lookback window
+          # Lookback window (hours)
           LOOKBACK_HOURS: "72"
 
-          # Analyst API
+          # Analyst API (optional but recommended)
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-
-          # Email (optional — only used if send_email is enabled)
-          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
-          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
 
         run: |
           python scanner.py
 
-      - name: Commit and push index.html
+      - name: Commit and push site update
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/index.html
-          git commit -m "Update daily insider log" || echo "No changes to commit"
+          git commit -m "Hourly update: insider & analyst signals" || echo "No changes to commit"
           git push
