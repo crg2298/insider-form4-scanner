@@ -29,14 +29,10 @@ def fetch_market_cap(ticker: str):
     api_key = os.getenv("FMP_API_KEY")
     if not api_key or not ticker:
         return None
-
     url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
-
     try:
         data = json.loads(http_get(url).decode())
-        if not data:
-            return None
-        return data[0].get("mktCap")
+        return data[0].get("mktCap") if data else None
     except:
         return None
 
@@ -55,12 +51,8 @@ def write_daily_update_html(body_html: str):
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
            .replace("{{H1}}", "Daily Insider Log")
-           .replace(
-               "{{SUBTITLE}}",
-               f"Insider buying, analyst conviction & market signals — last {LOOKBACK_HOURS} hours"
-           )
+           .replace("{{SUBTITLE}}", f"Insider & analyst activity — last {LOOKBACK_HOURS} hours")
            .replace("{{UPDATED}}", now_et)
-           .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", body_html)
     )
 
@@ -74,58 +66,35 @@ def load_state():
     if not os.path.exists(STATE_FILE):
         return {}
     try:
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+        return json.load(open(STATE_FILE))
     except:
         return {}
 
 def save_state(state):
     os.makedirs("docs", exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+    json.dump(state, open(STATE_FILE, "w"))
 
-# ================= FORM 4 PARSER ===================
+# ================= FORM 4 ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
+    ticker = root.findtext("issuer/issuerTradingSymbol", "")
+    owner = root.findtext("reportingOwner/reportingOwnerId/rptOwnerName", "Unknown")
+    role = root.findtext("reportingOwner/reportingOwnerRelationship/officerTitle", "Insider")
 
-    issuer = root.find("issuer")
-    ticker = issuer.findtext("issuerTradingSymbol", "") if issuer is not None else ""
-
-    owner = root.find("reportingOwner")
-    owner_name = owner.find("reportingOwnerId").findtext("rptOwnerName", "Unknown")
-
-    role = "Insider"
-    rel = owner.find("reportingOwnerRelationship")
-    if rel is not None:
-        title = rel.findtext("officerTitle")
-        if title:
-            role = title
+    total = 0.0
+    date = ""
 
     nd = root.find("nonDerivativeTable")
     if nd is None:
         return None
 
-    total = 0.0
-    date = ""
-
     for tx in nd.findall("nonDerivativeTransaction"):
-        code = tx.find("transactionCoding").findtext("transactionCode", "")
-        if code != "P":
+        if tx.findtext("transactionCoding/transactionCode") != "P":
             continue
-
-        date = tx.find("transactionDate").findtext("value", "")
-        shares = float(
-            tx.find("transactionAmounts")
-              .find("transactionShares")
-              .findtext("value", "0")
-        )
-        price = float(
-            tx.find("transactionAmounts")
-              .find("transactionPricePerShare")
-              .findtext("value", "0") or 0
-        )
-
+        date = tx.findtext("transactionDate/value", "")
+        shares = float(tx.findtext("transactionAmounts/transactionShares/value", "0"))
+        price = float(tx.findtext("transactionAmounts/transactionPricePerShare/value", "0") or 0)
         total += shares * price
 
     if total <= 0:
@@ -133,7 +102,7 @@ def parse_form4(xml_bytes):
 
     return {
         "ticker": ticker,
-        "owner": owner_name,
+        "owner": owner,
         "role": role,
         "total": round(total, 2),
         "date": date
@@ -145,221 +114,123 @@ def fetch_analyst_upgrades():
     api_key = os.getenv("FMP_API_KEY")
     if not api_key:
         return []
-
-    url = f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
-
     try:
-        data = json.loads(http_get(url).decode())
+        data = json.loads(http_get(
+            f"https://financialmodelingprep.com/api/v3/price-target-rss-feed?apikey={api_key}"
+        ).decode())
     except:
         return []
 
-    results = []
-    for item in data:
-        old = item.get("priceTargetPrior")
-        new = item.get("priceTarget")
-        if not old or not new or new <= old:
-            continue
-
-        pct = (new - old) / old
-        if pct < 0.07:
-            continue
-
-        results.append({
-            "symbol": item.get("symbol"),
-            "analyst": item.get("analystCompany"),
-            "old": old,
-            "new": new,
-            "pct": round(pct * 100, 1)
-        })
-
-    return results[:5]
+    return [
+        {
+            "symbol": i["symbol"],
+            "analyst": i["analystCompany"],
+            "pct": round((i["priceTarget"] - i["priceTargetPrior"]) / i["priceTargetPrior"] * 100, 1)
+        }
+        for i in data
+        if i.get("priceTarget") and i.get("priceTargetPrior")
+        and i["priceTarget"] > i["priceTargetPrior"]
+        and (i["priceTarget"] - i["priceTargetPrior"]) / i["priceTargetPrior"] >= 0.07
+    ][:5]
 
 # ================= MAIN ===================
 
 def main():
     state = load_state()
-
-    # NOTE: ALL filings (not just Form 4)
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
-    atom_xml = http_get(rss)
-    feed = ET.fromstring(atom_xml)
+    feed = ET.fromstring(http_get(rss))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
 
-    hits = []
-    market_caps = {}
-
     total_filings = 0
     form4_filings = 0
-    non_form4_filings = 0
-    most_recent_filing_ts = None
+    hits = []
+    clusters = defaultdict(int)
 
     for entry in feed.findall("atom:entry", ns):
         total_filings += 1
-
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
             continue
-
-        updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
-
-        if most_recent_filing_ts is None or updated_dt > most_recent_filing_ts:
-            most_recent_filing_ts = updated_dt
-
-        if updated_dt < cutoff:
+        if dt.datetime.fromisoformat(updated.replace("Z","+00:00")).replace(tzinfo=None) < cutoff:
             continue
 
-        # Determine filing type
         filing_type = ""
-        for cat in entry.findall("atom:category", ns):
-            if cat.get("label") == "form type":
-                filing_type = cat.get("term")
-                break
+        for c in entry.findall("atom:category", ns):
+            if c.get("label") == "form type":
+                filing_type = c.get("term")
 
         if filing_type != "4":
-            non_form4_filings += 1
             continue
-
         form4_filings += 1
 
-        xml_link = None
+        xml = None
         for l in entry.findall("atom:link", ns):
             if l.get("type") == "application/xml":
-                xml_link = l.get("href")
+                xml = l.get("href")
 
-        if not xml_link:
+        if not xml:
             continue
 
-        parsed = parse_form4(http_get(xml_link))
+        parsed = parse_form4(http_get(xml))
         if not parsed:
             continue
 
-        ticker = parsed["ticker"]
-
-        if ticker not in market_caps:
-            market_caps[ticker] = fetch_market_cap(ticker)
-
-        mkt_cap = market_caps.get(ticker)
-        if not mkt_cap or mkt_cap < MIN_MARKET_CAP:
+        cap = fetch_market_cap(parsed["ticker"])
+        if not cap or cap < MIN_MARKET_CAP:
             continue
 
-        parsed["market_cap"] = mkt_cap
+        parsed["market_cap"] = cap
         hits.append(parsed)
+        clusters[parsed["ticker"]] += 1
         state["last_buy_date"] = parsed["date"]
 
     save_state(state)
 
     analysts = fetch_analyst_upgrades()
 
-    # ================= DAILY BRIEF =================
+    # ================= TRADER INTELLIGENCE =================
 
-    blocks = []
+    insider_count = len(hits)
+    cluster_max = max(clusters.values()) if clusters else 0
 
-    today = dt.datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
-    last_buy = state.get("last_buy_date")
-
-    silence_days = "N/A"
-    if last_buy:
-        try:
-            silence_days = (today - dt.date.fromisoformat(last_buy)).days
-        except:
-            pass
-
-    if hits and analysts:
-        regime = "Mixed"
-    elif hits:
-        regime = "Insider-led"
-    elif analysts:
-        regime = "Analyst-led"
+    if insider_count == 0:
+        insider_regime = "Silent"
+    elif insider_count < 3:
+        insider_regime = "Sparse"
     else:
-        regime = "Quiet"
+        insider_regime = "Active"
 
-    interpretation = {
-        "Insider-led": "Insider participation increased, suggesting internally driven conviction.",
-        "Analyst-led": "Analyst activity remains elevated without insider confirmation.",
-        "Mixed": "Both insider and analyst signals are present, indicating selective risk appetite.",
-        "Quiet": "Both insider and analyst activity remain muted, signaling a low-conviction environment."
-    }[regime]
+    divergence = "Yes" if analysts and not hits else "No"
 
-    blocks.append(f"""
-    <div class="card hero">
-      <div class="section-title">🧠 Daily Market Signal Brief</div>
-      <div class="item muted">📅 Signal window: Last 14 days ({LOOKBACK_HOURS} hours)</div>
-      <div class="item"><strong>Market regime:</strong> {regime}</div>
-      <div class="item"><strong>Days since last insider buy:</strong> {silence_days}</div>
-      <div class="item"><strong>Interpretation:</strong> {interpretation}</div>
-    </div>
-    """)
-
-    # ================= SYSTEM STATUS =================
-
-    last_checked_str = (
-        most_recent_filing_ts
-        .replace(tzinfo=timezone.utc)
-        .astimezone(ZoneInfo("America/New_York"))
-        .strftime("%Y-%m-%d %I:%M %p ET")
-        if most_recent_filing_ts else "N/A"
+    takeaway = (
+        "Insider participation remains limited relative to historical norms, suggesting elevated "
+        "uncertainty despite ongoing analyst activity."
+        if insider_regime == "Silent" else
+        "Selective insider accumulation is occurring, with clustering indicating targeted conviction."
     )
+
+    blocks = [f"""
+    <div class="card hero">
+      <div class="section-title">🧠 Trader Intelligence Summary</div>
+      <div class="item"><strong>Insider regime:</strong> {insider_regime}</div>
+      <div class="item"><strong>Insider–Analyst divergence:</strong> {divergence}</div>
+      <div class="item"><strong>Max cluster score:</strong> {cluster_max}</div>
+      <div class="item"><strong>Trader takeaway:</strong> {takeaway}</div>
+    </div>
+    """]
 
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
       <div class="item">SEC filings scanned: {total_filings}</div>
       <div class="item">Form 4 filings scanned: {form4_filings}</div>
-      <div class="item">Non-insider filings scanned: {non_form4_filings}</div>
-      <div class="item">Valid insider buys detected: {len(hits)}</div>
-      <div class="item">Last SEC filing checked: {last_checked_str}</div>
-      <div class="item muted">• Insider transactions are only disclosed via Form 4 filings</div>
-      <div class="item muted">• Companies under $1B market cap are excluded</div>
+      <div class="item">Valid insider buys: {insider_count}</div>
     </div>
     """)
 
-    # ================= INSIDER BUYING =================
-
-    if hits:
-        grouped = defaultdict(list)
-        for h in hits:
-            grouped[h["ticker"]].append(h)
-
-        for ticker, items in grouped.items():
-            total = sum(i["total"] for i in items)
-            mkt_cap = items[0]["market_cap"]
-            pct_of_mkt_cap = (total / mkt_cap) * 100
-
-            blocks.append(f"""
-            <div class="card">
-              <div class="section-title">🔥 Insider Buying — {ticker}</div>
-              <div class="item muted">
-                {len(items)} insiders · ${total:,.0f} · {pct_of_mkt_cap:.3f}% of market cap
-              </div>
-            """)
-
-            for i in items:
-                blocks.append(
-                    f"<div class='item'>• {i['owner']} ({i['role']}) — ${i['total']:,.0f} on {i['date']}</div>"
-                )
-
-            blocks.append("</div>")
-
-    # ================= ANALYST UPGRADES =================
-
-    blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
-
-    if analysts:
-        for a in analysts:
-            blocks.append(
-                f"<div class='item'><strong>{a['symbol']}</strong> — {a['analyst']}<br>"
-                f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)</div>"
-            )
-    else:
-        blocks.append("<div class='empty'>No material analyst upgrades detected.</div>")
-
-    blocks.append("</div>")
-
     write_daily_update_html("\n".join(blocks))
-
-# ================= RUN ====================
 
 if __name__ == "__main__":
     main()
