@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 # ================= CONFIG =================
 
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
 MIN_BUY_DOLLARS = 3000
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 STATE_FILE = "docs/state.json"
