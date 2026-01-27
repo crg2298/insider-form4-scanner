@@ -2,46 +2,39 @@ name: Hourly Insider & Analyst Scanner
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 on:
   schedule:
-    # Runs at the top of every hour (UTC)
     - cron: "0 * * * *"
   workflow_dispatch:
-
-# 🔒 Prevent overlapping runs from canceling each other
-concurrency:
-  group: insider-scanner
-  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Run scanner
         env:
-          # Lookback window (hours)
-          LOOKBACK_HOURS: "72"
-
-          # Analyst API (optional but recommended)
+          LOOKBACK_HOURS: "336"
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-
-        run: |
-          python scanner.py
+        run: python scanner.py
 
       - name: Commit and push site update
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html
-          git commit -m "Hourly update: insider & analyst signals" || echo "No changes to commit"
+          git add docs/index.html docs/state.json
+          git commit -m "Hourly update" || echo "No changes"
           git push
