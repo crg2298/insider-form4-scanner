@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
 MIN_BUY_DOLLARS = 3000
+MIN_MARKET_CAP = 1_000_000_000  # $1B minimum
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 STATE_FILE = "docs/state.json"
 
@@ -22,6 +23,23 @@ def http_get(url: str) -> bytes:
     req.add_header("Accept", "*/*")
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
+
+# ================= MARKET CAP ===================
+
+def fetch_market_cap(ticker: str):
+    api_key = os.getenv("FMP_API_KEY")
+    if not api_key or not ticker:
+        return None
+
+    url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
+
+    try:
+        data = json.loads(http_get(url).decode())
+        if not data:
+            return None
+        return data[0].get("mktCap")
+    except:
+        return None
 
 # ================= HTML ===================
 
@@ -67,7 +85,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ================= FORM 4 =================
+# ================= FORM 4 ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
@@ -122,7 +140,7 @@ def parse_form4(xml_bytes):
         "date": date
     }
 
-# ================= ANALYSTS =================
+# ================= ANALYSTS ===================
 
 def fetch_analyst_upgrades():
     api_key = os.getenv("FMP_API_KEY")
@@ -170,6 +188,7 @@ def main():
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
     hits = []
     scanned = 0
+    market_caps = {}
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -191,9 +210,21 @@ def main():
             continue
 
         parsed = parse_form4(http_get(xml_link))
-        if parsed:
-            hits.append(parsed)
-            state["last_buy_date"] = parsed["date"]
+        if not parsed:
+            continue
+
+        ticker = parsed["ticker"]
+
+        if ticker not in market_caps:
+            market_caps[ticker] = fetch_market_cap(ticker)
+
+        mkt_cap = market_caps.get(ticker)
+        if not mkt_cap or mkt_cap < MIN_MARKET_CAP:
+            continue
+
+        parsed["market_cap"] = mkt_cap
+        hits.append(parsed)
+        state["last_buy_date"] = parsed["date"]
 
     save_state(state)
 
@@ -250,6 +281,7 @@ def main():
       <div class="item">Valid insider buys detected: {len(hits)}</div>
       <div class="item">Analyst upgrades detected: {len(analysts)}</div>
       <div class="item muted">Minimum buy filter: ${MIN_BUY_DOLLARS:,.0f}</div>
+      <div class="item muted">Minimum market cap: $1B</div>
     </div>
     """)
 
@@ -262,11 +294,15 @@ def main():
 
         for ticker, items in grouped.items():
             total = sum(i["total"] for i in items)
+            mkt_cap = items[0]["market_cap"]
+            pct_of_mkt_cap = (total / mkt_cap) * 100
 
             blocks.append(f"""
             <div class="card">
               <div class="section-title">🔥 Insider Buying — {ticker}</div>
-              <div class="item muted">{len(items)} insiders · ${total:,.0f}</div>
+              <div class="item muted">
+                {len(items)} insiders · ${total:,.0f} · {pct_of_mkt_cap:.3f}% of market cap
+              </div>
             """)
 
             for i in items:
