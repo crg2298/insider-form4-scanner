@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
+MIN_BUY_DOLLARS = 3000  # lowered to surface real activity
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
 # ================= HTTP ===================
@@ -53,10 +54,10 @@ def write_daily_update_html(body_html: str):
 
 def infer_sector(ticker: str) -> str:
     if not ticker:
-        return "Unknown"
+        return "Other"
     t = ticker.upper()
 
-    if t.startswith(("XOM", "CVX", "BP", "COP")):
+    if t.startswith(("XOM", "CVX", "COP")):
         return "Energy"
     if t.startswith(("MRNA", "BIIB", "PFE", "JNJ")):
         return "Biotech / Pharma"
@@ -111,7 +112,7 @@ def parse_form4(xml_bytes):
 
         total += shares * price
 
-    if total < 15000:
+    if total < MIN_BUY_DOLLARS:
         return None
 
     return {
@@ -157,80 +158,18 @@ def fetch_analyst_upgrades():
 
     return results[:5]
 
-# ================= META SIGNALS =================
-
-def meta_signal_block(insider_count, sector_counts, analyst_count):
-    if insider_count >= 5:
-        insider_trend = "Insider activity is accelerating across multiple names."
-    elif insider_count >= 2:
-        insider_trend = "Selective insider buying is emerging."
-    else:
-        insider_trend = "Insider activity remains muted market-wide."
-
-    top_sector = max(sector_counts, key=sector_counts.get) if sector_counts else None
-    sector_line = (
-        f"Most insider activity is concentrated in {top_sector}."
-        if top_sector and top_sector != "Other"
-        else "Insider activity is dispersed across sectors."
-    )
-
-    analyst_line = (
-        "Analyst conviction is increasing through aggressive price target revisions."
-        if analyst_count >= 3
-        else "Analyst activity remains selective across coverage."
-    )
-
-    return f"""
-    <div class="card">
-      <div class="section-title">🌐 Market Meta-Signals</div>
-      <div class="item">{insider_trend}</div>
-      <div class="item">{sector_line}</div>
-      <div class="item">{analyst_line}</div>
-      <div class="item muted">
-        Meta-signals highlight behavioral shifts across the market rather than
-        isolated company events, often preceding broader regime changes.
-      </div>
-    </div>
-    """
-
-# ================= SNAPSHOT =================
-
-def daily_market_snapshot(hits, analysts):
-    insider_state = (
-        "Insider participation is elevated, suggesting growing internal conviction."
-        if hits else
-        "Insider activity remains subdued, indicating a wait-and-see posture."
-    )
-
-    analyst_state = (
-        "Analyst sentiment shows selective optimism through price target increases."
-        if analysts else
-        "Analyst revisions are muted, signaling stable consensus expectations."
-    )
-
-    return f"""
-    <div class="card">
-      <div class="section-title">🧠 Daily Market Intelligence</div>
-      <div class="item">{insider_state}</div>
-      <div class="item">{analyst_state}</div>
-      <div class="item muted">
-        Quiet periods often precede volatility expansion. Monitoring insider behavior
-        and analyst conviction during these windows can surface early inflection points
-        before price momentum becomes obvious.
-      </div>
-    </div>
-    """
-
 # ================= MAIN ===================
 
 def main():
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
-    feed = ET.fromstring(http_get(rss).decode("utf-8", "ignore"))
+    atom_xml = http_get(rss)
+    feed = ET.fromstring(atom_xml)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
     hits = []
     sector_counts = defaultdict(int)
+    scanned = 0
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -241,33 +180,32 @@ def main():
         if updated_dt < cutoff:
             continue
 
-        link = None
+        scanned += 1
+
+        xml_link = None
         for l in entry.findall("atom:link", ns):
-            if l.get("rel") == "alternate":
-                link = l.get("href")
+            if l.get("type") == "application/xml":
+                xml_link = l.get("href")
 
-        if not link:
+        if not xml_link:
             continue
 
-        page = http_get(link).decode("utf-8", "ignore")
-
-        xml_url = None
-        for line in page.splitlines():
-            if ".xml" in line and "form4" in line.lower():
-                start = line.find("https://")
-                end = line.find(".xml") + 4
-                xml_url = line[start:end]
-                break
-
-        if not xml_url:
-            continue
-
-        parsed = parse_form4(http_get(xml_url))
+        parsed = parse_form4(http_get(xml_link))
         if parsed:
             hits.append(parsed)
             sector_counts[infer_sector(parsed["ticker"])] += 1
 
     blocks = []
+
+    # ===== SYSTEM STATUS =====
+    blocks.append(f"""
+    <div class="card">
+      <div class="section-title">🛠 System Status</div>
+      <div class="item">Form 4 filings scanned: {scanned}</div>
+      <div class="item">Valid insider buys detected: {len(hits)}</div>
+      <div class="item muted">Minimum buy filter: ${MIN_BUY_DOLLARS:,.0f}</div>
+    </div>
+    """)
 
     # ===== INSIDER BUYING =====
     if hits:
@@ -306,16 +244,9 @@ def main():
 
     blocks.append("</div>")
 
-    # ===== META SIGNALS =====
-    blocks.append(meta_signal_block(len(hits), sector_counts, len(analysts)))
-
-    # ===== DAILY SNAPSHOT =====
-    blocks.append(daily_market_snapshot(hits, analysts))
-
     write_daily_update_html("\n".join(blocks))
 
 # ================= RUN ====================
 
 if __name__ == "__main__":
     main()
-
