@@ -84,7 +84,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ================= FORM 4 ===================
+# ================= FORM 4 PARSER ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
@@ -127,6 +127,9 @@ def parse_form4(xml_bytes):
         )
 
         total += shares * price
+
+    if total <= 0:
+        return None
 
     return {
         "ticker": ticker,
@@ -176,18 +179,25 @@ def fetch_analyst_upgrades():
 def main():
     state = load_state()
 
-    rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
+    # NOTE: ALL filings (not just Form 4)
+    rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
     atom_xml = http_get(rss)
     feed = ET.fromstring(atom_xml)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
+
     hits = []
-    scanned = 0
     market_caps = {}
+
+    total_filings = 0
+    form4_filings = 0
+    non_form4_filings = 0
     most_recent_filing_ts = None
 
     for entry in feed.findall("atom:entry", ns):
+        total_filings += 1
+
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
             continue
@@ -200,7 +210,18 @@ def main():
         if updated_dt < cutoff:
             continue
 
-        scanned += 1
+        # Determine filing type
+        filing_type = ""
+        for cat in entry.findall("atom:category", ns):
+            if cat.get("label") == "form type":
+                filing_type = cat.get("term")
+                break
+
+        if filing_type != "4":
+            non_form4_filings += 1
+            continue
+
+        form4_filings += 1
 
         xml_link = None
         for l in entry.findall("atom:link", ns):
@@ -235,11 +256,9 @@ def main():
 
     blocks = []
 
-    today = dt.datetime.now(timezone.utc).astimezone(
-        ZoneInfo("America/New_York")
-    ).date()
-
+    today = dt.datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
     last_buy = state.get("last_buy_date")
+
     silence_days = "N/A"
     if last_buy:
         try:
@@ -286,13 +305,12 @@ def main():
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
-      <div class="item">Form 4 filings scanned: {scanned}</div>
+      <div class="item">SEC filings scanned: {total_filings}</div>
+      <div class="item">Form 4 filings scanned: {form4_filings}</div>
+      <div class="item">Non-insider filings scanned: {non_form4_filings}</div>
       <div class="item">Valid insider buys detected: {len(hits)}</div>
-      <div class="item">Analyst upgrades detected: {len(analysts)}</div>
-      <div class="item">Last SEC Form 4 filing checked: {last_checked_str}</div>
-      <div class="item muted">Coverage notes:</div>
-      <div class="item muted">• Filings are sourced directly from the SEC current Form 4 Atom feed</div>
-      <div class="item muted">• Filings outside the rolling {LOOKBACK_HOURS}-hour window are not included</div>
+      <div class="item">Last SEC filing checked: {last_checked_str}</div>
+      <div class="item muted">• Insider transactions are only disclosed via Form 4 filings</div>
       <div class="item muted">• Companies under $1B market cap are excluded</div>
     </div>
     """)
