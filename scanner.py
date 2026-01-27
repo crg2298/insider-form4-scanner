@@ -10,8 +10,10 @@ from zoneinfo import ZoneInfo
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
-MIN_BUY_DOLLARS = 3000  # lowered to surface real activity
+MIN_BUY_DOLLARS = 3000
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
+
+STATE_FILE = "docs/state.json"
 
 # ================= HTTP ===================
 
@@ -49,6 +51,22 @@ def write_daily_update_html(body_html: str):
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(html)
+
+# ================= STATE ===================
+
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return {}
+    try:
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_state(state):
+    os.makedirs("docs", exist_ok=True)
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 # ================= HELPERS =================
 
@@ -161,6 +179,8 @@ def fetch_analyst_upgrades():
 # ================= MAIN ===================
 
 def main():
+    state = load_state()
+
     rss = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
     atom_xml = http_get(rss)
     feed = ET.fromstring(atom_xml)
@@ -168,7 +188,6 @@ def main():
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
     hits = []
-    sector_counts = defaultdict(int)
     scanned = 0
 
     for entry in feed.findall("atom:entry", ns):
@@ -193,9 +212,37 @@ def main():
         parsed = parse_form4(http_get(xml_link))
         if parsed:
             hits.append(parsed)
-            sector_counts[infer_sector(parsed["ticker"])] += 1
+            state["last_buy_date"] = parsed["date"]
 
+    save_state(state)
+
+    # ===== DAILY BRIEF =====
     blocks = []
+
+    today = dt.datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+    last_buy = state.get("last_buy_date")
+
+    silence_days = "N/A"
+    if last_buy:
+        try:
+            silence_days = (today - dt.date.fromisoformat(last_buy)).days
+        except:
+            pass
+
+    interpretation = (
+        "Signals remain internally driven by executives."
+        if hits else
+        "Signals remain externally driven, with limited insider participation."
+    )
+
+    blocks.append(f"""
+    <div class="card hero">
+      <div class="section-title">🧠 Daily Insider Signal Brief</div>
+      <div class="item"><strong>Insider activity:</strong> {"Active" if hits else "Quiet"}</div>
+      <div class="item"><strong>Days since last insider buy:</strong> {silence_days}</div>
+      <div class="item"><strong>Interpretation:</strong> {interpretation}</div>
+    </div>
+    """)
 
     # ===== SYSTEM STATUS =====
     blocks.append(f"""
