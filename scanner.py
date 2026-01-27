@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
-MIN_BUY_DOLLARS = 3000
 MIN_MARKET_CAP = 1_000_000_000  # $1B minimum
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 STATE_FILE = "docs/state.json"
@@ -128,9 +127,6 @@ def parse_form4(xml_bytes):
         )
 
         total += shares * price
-
-    if total < MIN_BUY_DOLLARS:
-        return None
 
     return {
         "ticker": ticker,
@@ -280,7 +276,6 @@ def main():
       <div class="item">Form 4 filings scanned: {scanned}</div>
       <div class="item">Valid insider buys detected: {len(hits)}</div>
       <div class="item">Analyst upgrades detected: {len(analysts)}</div>
-      <div class="item muted">Minimum buy filter: ${MIN_BUY_DOLLARS:,.0f}</div>
       <div class="item muted">Minimum market cap: $1B</div>
     </div>
     """)
