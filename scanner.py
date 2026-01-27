@@ -38,6 +38,9 @@ def fetch_market_cap(ticker: str):
         return None
 
 # ================= TECHNICAL INDICATORS ===================
+# IMPORTANT:
+# Technicals are OPTIONAL context.
+# Missing technicals must NEVER invalidate an insider buy.
 
 def fetch_technical_indicators(ticker: str):
     api_key = os.getenv("FMP_API_KEY")
@@ -269,6 +272,7 @@ def main():
         if not market_caps[ticker] or market_caps[ticker] < MIN_MARKET_CAP:
             continue
 
+        # Technicals are OPTIONAL — do NOT filter insider buys
         if ticker not in technicals_cache:
             technicals_cache[ticker] = fetch_technical_indicators(ticker)
 
@@ -286,7 +290,6 @@ def main():
 
     blocks = []
 
-    # --- DAILY BRIEF
     blocks.append(f"""
     <div class="card hero">
       <div class="section-title">🧠 Daily Market Signal Brief</div>
@@ -296,7 +299,6 @@ def main():
     </div>
     """)
 
-    # --- SYSTEM STATUS
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
@@ -307,7 +309,7 @@ def main():
     </div>
     """)
 
-    # --- PRE-BREAKOUT WATCHLIST (NEW)
+    # --- PRE-BREAKOUT WATCHLIST (subset only)
     pre_breakouts = [
         h for h in hits
         if h.get("technicals") and h["technicals"].get("pre_breakout")
@@ -338,7 +340,6 @@ def main():
 
     blocks.append("</div>")
 
-    # --- ANALYST ACTIVITY
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
     if analysts:
         for a in analysts:
