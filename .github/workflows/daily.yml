@@ -9,6 +9,11 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch:
 
+# 🔒 Prevent overlapping runs from canceling each other
+concurrency:
+  group: insider-scanner
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
