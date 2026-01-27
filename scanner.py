@@ -45,26 +45,53 @@ def fetch_technical_indicators(ticker: str):
         return None
 
     base = "https://financialmodelingprep.com/api/v3/technical_indicator/daily"
+
     try:
         rsi = json.loads(http_get(
             f"{base}/{ticker}?period=14&type=rsi&apikey={api_key}"
         ).decode())
+
         atr = json.loads(http_get(
             f"{base}/{ticker}?period=14&type=atr&apikey={api_key}"
         ).decode())
+
+        atr_long = json.loads(http_get(
+            f"{base}/{ticker}?period=20&type=atr&apikey={api_key}"
+        ).decode())
+
         macd = json.loads(http_get(
             f"{base}/{ticker}?type=macd&apikey={api_key}"
         ).decode())
+
     except:
         return None
 
-    if not rsi or not atr or not macd:
+    if not rsi or not atr or not atr_long or not macd:
         return None
 
+    rsi_val = rsi[0]["rsi"]
+    atr_val = atr[0]["atr"]
+    atr_avg = atr_long[0]["atr"]
+
+    macd_val = macd[0]["macd"]
+    signal_val = macd[0]["signal"]
+
+    macd_cross = macd_val > signal_val
+
+    pre_breakout = (
+        40 <= rsi_val <= 55 and
+        atr_val < atr_avg * 0.8 and
+        macd_cross
+    )
+
     return {
-        "rsi": round(rsi[0]["rsi"], 1),
-        "atr": round(atr[0]["atr"], 2),
-        "macd_cross": macd[0]["macd"] > macd[0]["signal"]
+        "rsi": round(rsi_val, 1),
+        "atr": round(atr_val, 2),
+        "atr_avg": round(atr_avg, 2),
+        "macd": round(macd_val, 3),
+        "signal": round(signal_val, 3),
+        "macd_cross": macd_cross,
+        "pre_breakout": pre_breakout
     }
 
 # ================= HTML ===================
@@ -124,11 +151,13 @@ def parse_form4(xml_bytes):
     for tx in nd.findall("nonDerivativeTransaction"):
         if tx.findtext("transactionCoding/transactionCode") != "P":
             continue
+
         date = tx.findtext("transactionDate/value", "")
         shares = float(tx.findtext("transactionAmounts/transactionShares/value", "0"))
         price = float(tx.findtext(
             "transactionAmounts/transactionPricePerShare/value", "0"
         ) or 0)
+
         total += shares * price
 
     if total <= 0:
@@ -167,11 +196,13 @@ def fetch_analyst_upgrades():
         pct = (i["priceTarget"] - i["priceTargetPrior"]) / i["priceTargetPrior"]
         if pct < 0.07:
             continue
+
         out.append({
             "symbol": i["symbol"],
             "analyst": i["analystCompany"],
             "pct": round(pct * 100, 1)
         })
+
     return out[:5]
 
 # ================= MAIN ===================
@@ -191,9 +222,7 @@ def main():
     market_caps = {}
     cluster_counts = defaultdict(int)
 
-    total_filings = 0
-    form4_filings = 0
-    non_form4_filings = 0
+    total_filings = form4_filings = non_form4_filings = 0
 
     for entry in feed.findall("atom:entry", ns):
         total_filings += 1
@@ -202,11 +231,7 @@ def main():
         if not updated:
             continue
 
-        updated_dt = dt.datetime.fromisoformat(
-            updated.replace("Z", "+00:00")
-        ).replace(tzinfo=None)
-
-        if updated_dt < cutoff:
+        if dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None) < cutoff:
             continue
 
         filing_type = next(
@@ -226,6 +251,7 @@ def main():
              if l.get("type") == "application/xml"),
             None
         )
+
         if not xml_link:
             continue
 
@@ -260,7 +286,7 @@ def main():
 
     blocks = []
 
-    # --- DAILY BRIEF (always)
+    # --- DAILY BRIEF
     blocks.append(f"""
     <div class="card hero">
       <div class="section-title">🧠 Daily Market Signal Brief</div>
@@ -270,7 +296,7 @@ def main():
     </div>
     """)
 
-    # --- SYSTEM STATUS (always)
+    # --- SYSTEM STATUS
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
@@ -281,54 +307,38 @@ def main():
     </div>
     """)
 
-    # --- MARKET CONTEXT (always)
-    if not hits:
+    # --- PRE-BREAKOUT WATCHLIST (NEW)
+    pre_breakouts = [
+        h for h in hits
+        if h.get("technicals") and h["technicals"].get("pre_breakout")
+    ]
+
+    blocks.append("""
+    <div class="card">
+      <div class="section-title">🚀 Pre-Breakout Watchlist</div>
+    """)
+
+    if pre_breakouts:
+        for h in pre_breakouts:
+            t = h["technicals"]
+            blocks.append(f"""
+            <div class="item">
+              <strong>{h['ticker']}</strong> —
+              RSI: {t['rsi']} ·
+              ATR: {t['atr']} (avg {t['atr_avg']}) ·
+              MACD: {t['macd']} / {t['signal']}
+            </div>
+            """)
+    else:
         blocks.append("""
-        <div class="card">
-          <div class="section-title">🧭 Market Context</div>
-          <div class="item muted">
-            Insider silence is common during earnings blackout periods and risk-off regimes.
-            Absence of buying is itself a signal.
-          </div>
+        <div class="item muted">
+          No pre-breakout setups detected. Compression phases often precede large moves.
         </div>
         """)
 
-    # --- INSIDER BUYING (conditional)
-    grouped = defaultdict(list)
-    for h in hits:
-        grouped[h["ticker"]].append(h)
+    blocks.append("</div>")
 
-    for ticker, items in grouped.items():
-        total = sum(i["total"] for i in items)
-        mkt_cap = items[0]["market_cap"]
-        tech = items[0]["technicals"]
-
-        blocks.append(f"""
-        <div class="card">
-          <div class="section-title">🔥 Insider Buying — {ticker}</div>
-          <div class="item muted">
-            {len(items)} insiders · ${total:,.0f} · {(total/mkt_cap)*100:.3f}% of market cap
-            · Cluster score: {cluster_counts[ticker]}
-          </div>
-        """)
-
-        if tech:
-            blocks.append(f"""
-            <div class="item muted">
-              📈 Technical Context —
-              RSI(14): {tech['rsi']} · ATR(14): {tech['atr']} ·
-              MACD Cross: {"Yes" if tech['macd_cross'] else "No"}
-            </div>
-            """)
-
-        for i in items:
-            blocks.append(
-                f"<div class='item'>• {i['owner']} ({i['role']}) — ${i['total']:,.0f} on {i['date']}</div>"
-            )
-
-        blocks.append("</div>")
-
-    # --- ANALYSTS (always)
+    # --- ANALYST ACTIVITY
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
     if analysts:
         for a in analysts:
