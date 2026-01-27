@@ -185,6 +185,7 @@ def main():
     hits = []
     scanned = 0
     market_caps = {}
+    most_recent_filing_ts = None
 
     for entry in feed.findall("atom:entry", ns):
         updated = entry.findtext("atom:updated", "", ns)
@@ -192,6 +193,10 @@ def main():
             continue
 
         updated_dt = dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
+
+        if most_recent_filing_ts is None or updated_dt > most_recent_filing_ts:
+            most_recent_filing_ts = updated_dt
+
         if updated_dt < cutoff:
             continue
 
@@ -270,13 +275,25 @@ def main():
 
     # ================= SYSTEM STATUS =================
 
+    last_checked_str = (
+        most_recent_filing_ts
+        .replace(tzinfo=timezone.utc)
+        .astimezone(ZoneInfo("America/New_York"))
+        .strftime("%Y-%m-%d %I:%M %p ET")
+        if most_recent_filing_ts else "N/A"
+    )
+
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
       <div class="item">Form 4 filings scanned: {scanned}</div>
       <div class="item">Valid insider buys detected: {len(hits)}</div>
       <div class="item">Analyst upgrades detected: {len(analysts)}</div>
-      <div class="item muted">Minimum market cap: $1B</div>
+      <div class="item">Last SEC Form 4 filing checked: {last_checked_str}</div>
+      <div class="item muted">Coverage notes:</div>
+      <div class="item muted">• Filings are sourced directly from the SEC current Form 4 Atom feed</div>
+      <div class="item muted">• Filings outside the rolling {LOOKBACK_HOURS}-hour window are not included</div>
+      <div class="item muted">• Companies under $1B market cap are excluded</div>
     </div>
     """)
 
