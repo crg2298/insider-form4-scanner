@@ -199,7 +199,7 @@ def main():
 
     analysts = fetch_analyst_upgrades()
 
-    # ================= ALWAYS-ON DAILY BRIEF =================
+    # ================= DAILY BRIEF =================
 
     blocks = []
 
@@ -234,6 +234,7 @@ def main():
     blocks.append(f"""
     <div class="card hero">
       <div class="section-title">🧠 Daily Market Signal Brief</div>
+      <div class="item muted">📅 Signal window: Last 14 days ({LOOKBACK_HOURS} hours)</div>
       <div class="item"><strong>Market regime:</strong> {regime}</div>
       <div class="item"><strong>Days since last insider buy:</strong> {silence_days}</div>
       <div class="item"><strong>Interpretation:</strong> {interpretation}</div>
