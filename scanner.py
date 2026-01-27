@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "72"))
 MIN_BUY_DOLLARS = 3000
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-
 STATE_FILE = "docs/state.json"
 
 # ================= HTTP ===================
@@ -67,24 +66,6 @@ def save_state(state):
     os.makedirs("docs", exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
-
-# ================= HELPERS =================
-
-def infer_sector(ticker: str) -> str:
-    if not ticker:
-        return "Other"
-    t = ticker.upper()
-
-    if t.startswith(("XOM", "CVX", "COP")):
-        return "Energy"
-    if t.startswith(("MRNA", "BIIB", "PFE", "JNJ")):
-        return "Biotech / Pharma"
-    if t.startswith(("AAPL", "MSFT", "NVDA", "AMD", "GOOG")):
-        return "Technology"
-    if t.startswith(("JPM", "BAC", "GS", "WFC")):
-        return "Financials"
-
-    return "Other"
 
 # ================= FORM 4 =================
 
@@ -216,12 +197,17 @@ def main():
 
     save_state(state)
 
-    # ===== DAILY BRIEF =====
+    analysts = fetch_analyst_upgrades()
+
+    # ================= ALWAYS-ON DAILY BRIEF =================
+
     blocks = []
 
-    today = dt.datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
-    last_buy = state.get("last_buy_date")
+    today = dt.datetime.now(timezone.utc).astimezone(
+        ZoneInfo("America/New_York")
+    ).date()
 
+    last_buy = state.get("last_buy_date")
     silence_days = "N/A"
     if last_buy:
         try:
@@ -229,32 +215,45 @@ def main():
         except:
             pass
 
-    interpretation = (
-        "Signals remain internally driven by executives."
-        if hits else
-        "Signals remain externally driven, with limited insider participation."
-    )
+    if hits and analysts:
+        regime = "Mixed"
+    elif hits:
+        regime = "Insider-led"
+    elif analysts:
+        regime = "Analyst-led"
+    else:
+        regime = "Quiet"
+
+    interpretation = {
+        "Insider-led": "Insider participation increased, suggesting internally driven conviction.",
+        "Analyst-led": "Analyst activity remains elevated without insider confirmation.",
+        "Mixed": "Both insider and analyst signals are present, indicating selective risk appetite.",
+        "Quiet": "Both insider and analyst activity remain muted, signaling a low-conviction environment."
+    }[regime]
 
     blocks.append(f"""
     <div class="card hero">
-      <div class="section-title">🧠 Daily Insider Signal Brief</div>
-      <div class="item"><strong>Insider activity:</strong> {"Active" if hits else "Quiet"}</div>
+      <div class="section-title">🧠 Daily Market Signal Brief</div>
+      <div class="item"><strong>Market regime:</strong> {regime}</div>
       <div class="item"><strong>Days since last insider buy:</strong> {silence_days}</div>
       <div class="item"><strong>Interpretation:</strong> {interpretation}</div>
     </div>
     """)
 
-    # ===== SYSTEM STATUS =====
+    # ================= SYSTEM STATUS =================
+
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
       <div class="item">Form 4 filings scanned: {scanned}</div>
       <div class="item">Valid insider buys detected: {len(hits)}</div>
+      <div class="item">Analyst upgrades detected: {len(analysts)}</div>
       <div class="item muted">Minimum buy filter: ${MIN_BUY_DOLLARS:,.0f}</div>
     </div>
     """)
 
-    # ===== INSIDER BUYING =====
+    # ================= INSIDER BUYING =================
+
     if hits:
         grouped = defaultdict(list)
         for h in hits:
@@ -276,8 +275,8 @@ def main():
 
             blocks.append("</div>")
 
-    # ===== ANALYST UPGRADES =====
-    analysts = fetch_analyst_upgrades()
+    # ================= ANALYST UPGRADES =================
+
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Upgrades</div>")
 
     if analysts:
@@ -287,7 +286,7 @@ def main():
                 f"Target ${a['old']} → ${a['new']} (+{a['pct']}%)</div>"
             )
     else:
-        blocks.append("<div class='empty'>No strong analyst upgrades detected.</div>")
+        blocks.append("<div class='empty'>No material analyst upgrades detected.</div>")
 
     blocks.append("</div>")
 
