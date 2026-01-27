@@ -191,7 +191,9 @@ def main():
     market_caps = {}
     cluster_counts = defaultdict(int)
 
-    total_filings = form4_filings = non_form4_filings = 0
+    total_filings = 0
+    form4_filings = 0
+    non_form4_filings = 0
 
     for entry in feed.findall("atom:entry", ns):
         total_filings += 1
@@ -199,7 +201,12 @@ def main():
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
             continue
-        if dt.datetime.fromisoformat(updated.replace("Z","+00:00")).replace(tzinfo=None) < cutoff:
+
+        updated_dt = dt.datetime.fromisoformat(
+            updated.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+
+        if updated_dt < cutoff:
             continue
 
         filing_type = next(
@@ -227,6 +234,9 @@ def main():
             continue
 
         ticker = parsed["ticker"]
+        if not ticker:
+            continue
+
         if ticker not in market_caps:
             market_caps[ticker] = fetch_market_cap(ticker)
 
@@ -250,6 +260,16 @@ def main():
 
     blocks = []
 
+    # --- DAILY BRIEF (always)
+    blocks.append(f"""
+    <div class="card hero">
+      <div class="section-title">🧠 Daily Market Signal Brief</div>
+      <div class="item">
+        {"Insider accumulation detected." if hits else "No material insider accumulation detected."}
+      </div>
+    </div>
+    """)
+
     # --- SYSTEM STATUS (always)
     blocks.append(f"""
     <div class="card">
@@ -266,16 +286,19 @@ def main():
         blocks.append("""
         <div class="card">
           <div class="section-title">🧭 Market Context</div>
-          <div class="item">
-            No qualifying insider purchases were detected in this window for companies above $1B market cap.
-            Insider silence is common during earnings blackouts and risk-off regimes and is itself informative.
+          <div class="item muted">
+            Insider silence is common during earnings blackout periods and risk-off regimes.
+            Absence of buying is itself a signal.
           </div>
         </div>
         """)
 
     # --- INSIDER BUYING (conditional)
-    for ticker, items in defaultdict(list, {h["ticker"]: [] for h in hits}).items():
-        items = [h for h in hits if h["ticker"] == ticker]
+    grouped = defaultdict(list)
+    for h in hits:
+        grouped[h["ticker"]].append(h)
+
+    for ticker, items in grouped.items():
         total = sum(i["total"] for i in items)
         mkt_cap = items[0]["market_cap"]
         tech = items[0]["technicals"]
@@ -292,7 +315,7 @@ def main():
         if tech:
             blocks.append(f"""
             <div class="item muted">
-              📈 Pre-Move Technical Context —
+              📈 Technical Context —
               RSI(14): {tech['rsi']} · ATR(14): {tech['atr']} ·
               MACD Cross: {"Yes" if tech['macd_cross'] else "No"}
             </div>
