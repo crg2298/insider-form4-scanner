@@ -50,19 +50,15 @@ def fetch_technical_indicators(ticker: str):
         rsi = json.loads(http_get(
             f"{base}/{ticker}?period=14&type=rsi&apikey={api_key}"
         ).decode())
-
         atr = json.loads(http_get(
             f"{base}/{ticker}?period=14&type=atr&apikey={api_key}"
         ).decode())
-
         atr_long = json.loads(http_get(
             f"{base}/{ticker}?period=20&type=atr&apikey={api_key}"
         ).decode())
-
         macd = json.loads(http_get(
             f"{base}/{ticker}?type=macd&apikey={api_key}"
         ).decode())
-
     except:
         return None
 
@@ -109,10 +105,7 @@ def write_daily_update_html(body_html: str):
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
            .replace("{{H1}}", "Daily Insider Log")
-           .replace(
-               "{{SUBTITLE}}",
-               f"Insider buying, analyst conviction & market signals — last {LOOKBACK_HOURS} hours"
-           )
+           .replace("{{SUBTITLE}}", f"Insider buying, analyst conviction & market signals — last {LOOKBACK_HOURS} hours")
            .replace("{{UPDATED}}", now_et)
            .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", body_html)
@@ -136,28 +129,28 @@ def save_state(state):
     os.makedirs("docs", exist_ok=True)
     json.dump(state, open(STATE_FILE, "w"))
 
-# ================= FORM 4 ===================
+# ================= FORM 4 (FIXED) ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
+    ns = {"ns": root.tag.split("}")[0].strip("{")}
 
     total = 0.0
     total_shares = 0.0
     date = ""
 
-    nd = root.find("nonDerivativeTable")
+    nd = root.find(".//ns:nonDerivativeTable", ns)
     if nd is None:
         return None
 
-    for tx in nd.findall("nonDerivativeTransaction"):
-        if tx.findtext("transactionCoding/transactionCode") != "P":
+    for tx in nd.findall(".//ns:nonDerivativeTransaction", ns):
+        code = tx.findtext(".//ns:transactionCode", "", ns)
+        if code != "P":
             continue
 
-        date = tx.findtext("transactionDate/value", "")
-        shares = float(tx.findtext("transactionAmounts/transactionShares/value", "0"))
-        price = float(tx.findtext(
-            "transactionAmounts/transactionPricePerShare/value", "0"
-        ) or 0)
+        date = tx.findtext(".//ns:transactionDate/ns:value", "", ns)
+        shares = float(tx.findtext(".//ns:transactionShares/ns:value", "0", ns))
+        price = float(tx.findtext(".//ns:transactionPricePerShare/ns:value", "0", ns) or 0)
 
         total_shares += shares
         if price > 0:
@@ -167,11 +160,9 @@ def parse_form4(xml_bytes):
         return None
 
     return {
-        "ticker": root.findtext("issuer/issuerTradingSymbol", ""),
-        "owner": root.findtext("reportingOwner/reportingOwnerId/rptOwnerName", "Unknown"),
-        "role": root.findtext(
-            "reportingOwner/reportingOwnerRelationship/officerTitle", "Insider"
-        ),
+        "ticker": root.findtext(".//ns:issuerTradingSymbol", "", ns),
+        "owner": root.findtext(".//ns:rptOwnerName", "Unknown", ns),
+        "role": root.findtext(".//ns:officerTitle", "Insider", ns),
         "total": round(total, 2),
         "shares": int(total_shares),
         "date": date
@@ -215,7 +206,6 @@ def main():
     state = load_state()
     technicals_cache = {}
 
-    # ✅ FIXED SEC FEED (Form 4 only)
     feed = ET.fromstring(http_get(
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
     ))
@@ -226,11 +216,9 @@ def main():
     hits = []
     market_caps = {}
     cluster_counts = defaultdict(int)
-
-    total_filings = form4_filings = non_form4_filings = 0
+    form4_filings = 0
 
     for entry in feed.findall("atom:entry", ns):
-        total_filings += 1
         form4_filings += 1
 
         updated = entry.findtext("atom:updated", "", ns)
@@ -295,6 +283,26 @@ def main():
       <div class="item">Valid insider buys detected: {len(hits)}</div>
     </div>
     """)
+
+    blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
+    if analysts:
+        for a in analysts:
+            blocks.append(f"<div class='item'><strong>{a['symbol']}</strong> — {a['analyst']} (+{a['pct']}%)</div>")
+    else:
+        blocks.append("<div class='item muted'>No material analyst upgrades detected.</div>")
+    blocks.append("</div>")
+
+    blocks.append("<div class='card'><div class='section-title'>🚀 Pre-Breakout Watchlist</div>")
+    pre_breakouts = [h for h in hits if h.get("technicals") and h["technicals"].get("pre_breakout")]
+    if pre_breakouts:
+        for h in pre_breakouts:
+            t = h["technicals"]
+            blocks.append(
+                f"<div class='item'><strong>{h['ticker']}</strong> — RSI {t['rsi']} · ATR {t['atr']} · MACD {t['macd']} / {t['signal']}</div>"
+            )
+    else:
+        blocks.append("<div class='item muted'>No pre-breakout setups detected.</div>")
+    blocks.append("</div>")
 
     write_daily_update_html("\n".join(blocks))
 
