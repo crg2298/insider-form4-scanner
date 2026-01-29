@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
-MIN_MARKET_CAP = 100_000_000  # $100M minimum
+MIN_MARKET_CAP = 10_000_000  # $10M minimum (REALISTIC)
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 
 # ================= HTTP ===================
@@ -36,7 +36,7 @@ def fetch_market_cap(ticker: str):
     except:
         return None
 
-# ================= FORM 4 (ROBUST + REAL) ===================
+# ================= FORM 4 ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
@@ -47,7 +47,6 @@ def parse_form4(xml_bytes):
     date = ""
     codes_seen = []
 
-    # --- NON-DERIVATIVE TRANSACTIONS ---
     for tx in root.findall(".//ns:nonDerivativeTransaction", ns):
         code = tx.findtext(".//ns:transactionCode", "", ns)
         shares = float(tx.findtext(".//ns:transactionShares/ns:value", "0", ns))
@@ -60,7 +59,6 @@ def parse_form4(xml_bytes):
         if not date:
             date = tx.findtext(".//ns:transactionDate/ns:value", "", ns)
 
-    # --- DERIVATIVE TRANSACTIONS ---
     for tx in root.findall(".//ns:derivativeTransaction", ns):
         code = tx.findtext(".//ns:transactionCode", "", ns)
         shares = float(tx.findtext(".//ns:transactionShares/ns:value", "0", ns))
@@ -73,13 +71,12 @@ def parse_form4(xml_bytes):
     if total_shares <= 0:
         return None
 
-    # --- TIER CLASSIFICATION ---
     if "P" in codes_seen:
-        tier = "Strong Buy"
+        tier = "Open-Market Buy"
     elif any(c in codes_seen for c in ("M", "C")):
         tier = "Accumulation"
     elif "A" in codes_seen:
-        tier = "Context"
+        tier = "Equity Award (Context)"
     else:
         tier = "Other"
 
@@ -138,7 +135,7 @@ def write_daily_update_html(body_html: str):
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
            .replace("{{H1}}", "Daily Insider Log")
-           .replace("{{SUBTITLE}}", f"Insider activity, analyst signals & structure — last {LOOKBACK_HOURS} hours")
+           .replace("{{SUBTITLE}}", f"Insider activity & analyst signals — last {LOOKBACK_HOURS} hours")
            .replace("{{UPDATED}}", now_et)
            .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", body_html)
@@ -193,7 +190,7 @@ def main():
         if ticker not in market_caps:
             market_caps[ticker] = fetch_market_cap(ticker)
 
-        if not market_caps[ticker] or market_caps[ticker] < MIN_MARKET_CAP:
+        if market_caps[ticker] is not None and market_caps[ticker] < MIN_MARKET_CAP:
             continue
 
         hits.append(parsed)
