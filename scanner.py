@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 # ================= CONFIG =================
 
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
-MIN_MARKET_CAP = 1_000_000_000  # $1B minimum
+MIN_MARKET_CAP = 100_000_000  # $100M minimum
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
 STATE_FILE = "docs/state.json"
 
