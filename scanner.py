@@ -81,7 +81,7 @@ def fetch_technical_indicators(ticker: str):
         "pre_breakout": pre_breakout
     }
 
-# ================= FORM 4 (TIERED + FIXED) ===================
+# ================= FORM 4 (TIERED + COUNTS) ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
@@ -113,7 +113,7 @@ def parse_form4(xml_bytes):
     if total_shares <= 0:
         return None
 
-    # ----- TIER LOGIC -----
+    # ---- Tier classification ----
     if "P" in codes_seen:
         tier = "Strong Buy"
     elif any(c in codes_seen for c in ("M", "C")):
@@ -121,7 +121,7 @@ def parse_form4(xml_bytes):
     elif "A" in codes_seen:
         tier = "Context"
     else:
-        return None
+        tier = "Other"
 
     return {
         "ticker": root.findtext(".//ns:issuerTradingSymbol", "", ns),
@@ -130,7 +130,8 @@ def parse_form4(xml_bytes):
         "shares": int(total_shares),
         "total": round(total_value, 2),
         "date": date,
-        "tier": tier
+        "tier": tier,
+        "codes": codes_seen
     }
 
 # ================= ANALYSTS ===================
@@ -168,8 +169,7 @@ def fetch_analyst_upgrades():
 # ================= HTML ===================
 
 def write_daily_update_html(body_html: str):
-    with open("docs/template.html", "r", encoding="utf-8") as f:
-        tpl = f.read()
+    tpl = open("docs/template.html", "r", encoding="utf-8").read()
 
     now_et = dt.datetime.now(timezone.utc).astimezone(
         ZoneInfo("America/New_York")
@@ -190,8 +190,8 @@ def write_daily_update_html(body_html: str):
 # ================= MAIN ===================
 
 def main():
-    state = {}
     technicals_cache = {}
+    tx_summary = defaultdict(int)
 
     feed = ET.fromstring(http_get(
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
@@ -226,6 +226,9 @@ def main():
         if not parsed:
             continue
 
+        for c in parsed["codes"]:
+            tx_summary[c] += 1
+
         ticker = parsed["ticker"]
         if not ticker:
             continue
@@ -254,11 +257,16 @@ def main():
     <div class="card">
       <div class="section-title">🛠 System Status</div>
       <div class="item">Form 4 filings scanned: {form4_filings}</div>
-      <div class="item">Valid insider signals detected: {len(hits)}</div>
+      <div class="item">Open-market buys (P): {tx_summary.get("P", 0)}</div>
+      <div class="item">Option exercises (M): {tx_summary.get("M", 0)}</div>
+      <div class="item">Awards (A): {tx_summary.get("A", 0)}</div>
+      <div class="item">Other transactions: {
+        sum(v for k, v in tx_summary.items() if k not in {"P","M","A"})
+      }</div>
     </div>
     """)
 
-    blocks.append("<div class='card'><div class='section-title'>🔥 Insider Activity</div>")
+    blocks.append("<div class='card'><div class='section-title'>🔥 Insider Activity (Tiered)</div>")
     if hits:
         for h in hits:
             blocks.append(
@@ -266,7 +274,7 @@ def main():
                 f"{h['tier']} · {h['shares']} shares · {h['owner']} ({h['role']})</div>"
             )
     else:
-        blocks.append("<div class='item muted'>No insider activity detected.</div>")
+        blocks.append("<div class='item muted'>No qualifying insider activity detected.</div>")
     blocks.append("</div>")
 
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
@@ -282,7 +290,10 @@ def main():
     if pre:
         for h in pre:
             t = h["technicals"]
-            blocks.append(f"<div class='item'><strong>{h['ticker']}</strong> — RSI {t['rsi']} · ATR {t['atr']} · MACD {t['macd']} / {t['signal']}</div>")
+            blocks.append(
+                f"<div class='item'><strong>{h['ticker']}</strong> — "
+                f"RSI {t['rsi']} · ATR {t['atr']} · MACD {t['macd']} / {t['signal']}</div>"
+            )
     else:
         blocks.append("<div class='item muted'>No pre-breakout setups detected.</div>")
     blocks.append("</div>")
