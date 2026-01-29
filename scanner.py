@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "336"))  # 14 days
 MIN_MARKET_CAP = 100_000_000  # $100M minimum
 SEC_USER_AGENT = "Form4Scanner/1.0 (contact: ginsbergcaleb71@gmail.com)"
-STATE_FILE = "docs/state.json"
 
 # ================= HTTP ===================
 
@@ -37,83 +36,44 @@ def fetch_market_cap(ticker: str):
     except:
         return None
 
-# ================= TECHNICAL INDICATORS ===================
-
-def fetch_technical_indicators(ticker: str):
-    api_key = os.getenv("FMP_API_KEY")
-    if not api_key or not ticker:
-        return None
-
-    base = "https://financialmodelingprep.com/api/v3/technical_indicator/daily"
-
-    try:
-        rsi = json.loads(http_get(f"{base}/{ticker}?period=14&type=rsi&apikey={api_key}").decode())
-        atr = json.loads(http_get(f"{base}/{ticker}?period=14&type=atr&apikey={api_key}").decode())
-        atr_long = json.loads(http_get(f"{base}/{ticker}?period=20&type=atr&apikey={api_key}").decode())
-        macd = json.loads(http_get(f"{base}/{ticker}?type=macd&apikey={api_key}").decode())
-    except:
-        return None
-
-    if not rsi or not atr or not atr_long or not macd:
-        return None
-
-    rsi_val = rsi[0]["rsi"]
-    atr_val = atr[0]["atr"]
-    atr_avg = atr_long[0]["atr"]
-    macd_val = macd[0]["macd"]
-    signal_val = macd[0]["signal"]
-
-    macd_cross = macd_val > signal_val
-
-    pre_breakout = (
-        40 <= rsi_val <= 55 and
-        atr_val < atr_avg * 0.8 and
-        macd_cross
-    )
-
-    return {
-        "rsi": round(rsi_val, 1),
-        "atr": round(atr_val, 2),
-        "atr_avg": round(atr_avg, 2),
-        "macd": round(macd_val, 3),
-        "signal": round(signal_val, 3),
-        "macd_cross": macd_cross,
-        "pre_breakout": pre_breakout
-    }
-
-# ================= FORM 4 (TIERED + COUNTS) ===================
+# ================= FORM 4 (ROBUST + REAL) ===================
 
 def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
     ns = {"ns": root.tag.split("}")[0].strip("{")}
 
-    total_value = 0.0
     total_shares = 0.0
+    total_value = 0.0
     date = ""
     codes_seen = []
 
-    nd = root.find(".//ns:nonDerivativeTable", ns)
-    if nd is None:
-        return None
-
-    for tx in nd.findall(".//ns:nonDerivativeTransaction", ns):
+    # --- NON-DERIVATIVE TRANSACTIONS ---
+    for tx in root.findall(".//ns:nonDerivativeTransaction", ns):
         code = tx.findtext(".//ns:transactionCode", "", ns)
-        codes_seen.append(code)
-
         shares = float(tx.findtext(".//ns:transactionShares/ns:value", "0", ns))
         price = float(tx.findtext(".//ns:transactionPricePerShare/ns:value", "0", ns) or 0)
 
+        codes_seen.append(code)
         total_shares += shares
         if price > 0:
             total_value += shares * price
+        if not date:
+            date = tx.findtext(".//ns:transactionDate/ns:value", "", ns)
 
+    # --- DERIVATIVE TRANSACTIONS ---
+    for tx in root.findall(".//ns:derivativeTransaction", ns):
+        code = tx.findtext(".//ns:transactionCode", "", ns)
+        shares = float(tx.findtext(".//ns:transactionShares/ns:value", "0", ns))
+
+        codes_seen.append(code)
+        total_shares += shares
         if not date:
             date = tx.findtext(".//ns:transactionDate/ns:value", "", ns)
 
     if total_shares <= 0:
         return None
 
-    # ---- Tier classification ----
+    # --- TIER CLASSIFICATION ---
     if "P" in codes_seen:
         tier = "Strong Buy"
     elif any(c in codes_seen for c in ("M", "C")):
@@ -131,7 +91,7 @@ def parse_form4(xml_bytes):
         "total": round(total_value, 2),
         "date": date,
         "tier": tier,
-        "codes": codes_seen
+        "codes": list(set(codes_seen))
     }
 
 # ================= ANALYSTS ===================
@@ -178,7 +138,7 @@ def write_daily_update_html(body_html: str):
     html = (
         tpl.replace("{{TITLE}}", "Daily Insider Log")
            .replace("{{H1}}", "Daily Insider Log")
-           .replace("{{SUBTITLE}}", f"Insider buying, analyst conviction & market signals — last {LOOKBACK_HOURS} hours")
+           .replace("{{SUBTITLE}}", f"Insider activity, analyst signals & structure — last {LOOKBACK_HOURS} hours")
            .replace("{{UPDATED}}", now_et)
            .replace("{{HOURS}}", str(LOOKBACK_HOURS))
            .replace("{{BODY}}", body_html)
@@ -190,8 +150,9 @@ def write_daily_update_html(body_html: str):
 # ================= MAIN ===================
 
 def main():
-    technicals_cache = {}
     tx_summary = defaultdict(int)
+    hits = []
+    market_caps = {}
 
     feed = ET.fromstring(http_get(
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
@@ -199,9 +160,6 @@ def main():
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
     cutoff = dt.datetime.utcnow() - dt.timedelta(hours=LOOKBACK_HOURS)
-
-    hits = []
-    market_caps = {}
     form4_filings = 0
 
     for entry in feed.findall("atom:entry", ns):
@@ -210,7 +168,6 @@ def main():
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
             continue
-
         if dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None) < cutoff:
             continue
 
@@ -239,12 +196,6 @@ def main():
         if not market_caps[ticker] or market_caps[ticker] < MIN_MARKET_CAP:
             continue
 
-        if ticker not in technicals_cache:
-            technicals_cache[ticker] = fetch_technical_indicators(ticker)
-
-        parsed["market_cap"] = market_caps[ticker]
-        parsed["technicals"] = technicals_cache.get(ticker)
-
         hits.append(parsed)
 
     analysts = fetch_analyst_upgrades()
@@ -257,16 +208,13 @@ def main():
     <div class="card">
       <div class="section-title">🛠 System Status</div>
       <div class="item">Form 4 filings scanned: {form4_filings}</div>
-      <div class="item">Open-market buys (P): {tx_summary.get("P", 0)}</div>
-      <div class="item">Option exercises (M): {tx_summary.get("M", 0)}</div>
-      <div class="item">Awards (A): {tx_summary.get("A", 0)}</div>
-      <div class="item">Other transactions: {
-        sum(v for k, v in tx_summary.items() if k not in {"P","M","A"})
-      }</div>
+      <div class="item">Open-market buys (P): {tx_summary.get("P",0)}</div>
+      <div class="item">Option exercises (M): {tx_summary.get("M",0)}</div>
+      <div class="item">Awards (A): {tx_summary.get("A",0)}</div>
     </div>
     """)
 
-    blocks.append("<div class='card'><div class='section-title'>🔥 Insider Activity (Tiered)</div>")
+    blocks.append("<div class='card'><div class='section-title'>🔥 Insider Activity</div>")
     if hits:
         for h in hits:
             blocks.append(
@@ -274,7 +222,7 @@ def main():
                 f"{h['tier']} · {h['shares']} shares · {h['owner']} ({h['role']})</div>"
             )
     else:
-        blocks.append("<div class='item muted'>No qualifying insider activity detected.</div>")
+        blocks.append("<div class='item muted'>No qualifying insider activity.</div>")
     blocks.append("</div>")
 
     blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
@@ -282,20 +230,7 @@ def main():
         for a in analysts:
             blocks.append(f"<div class='item'><strong>{a['symbol']}</strong> — {a['analyst']} (+{a['pct']}%)</div>")
     else:
-        blocks.append("<div class='item muted'>No material analyst upgrades detected.</div>")
-    blocks.append("</div>")
-
-    blocks.append("<div class='card'><div class='section-title'>🚀 Pre-Breakout Watchlist</div>")
-    pre = [h for h in hits if h.get("technicals") and h["technicals"].get("pre_breakout")]
-    if pre:
-        for h in pre:
-            t = h["technicals"]
-            blocks.append(
-                f"<div class='item'><strong>{h['ticker']}</strong> — "
-                f"RSI {t['rsi']} · ATR {t['atr']} · MACD {t['macd']} / {t['signal']}</div>"
-            )
-    else:
-        blocks.append("<div class='item muted'>No pre-breakout setups detected.</div>")
+        blocks.append("<div class='item muted'>No material analyst upgrades.</div>")
     blocks.append("</div>")
 
     write_daily_update_html("\n".join(blocks))
