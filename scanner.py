@@ -38,9 +38,6 @@ def fetch_market_cap(ticker: str):
         return None
 
 # ================= TECHNICAL INDICATORS ===================
-# IMPORTANT:
-# Technicals are OPTIONAL context.
-# Missing technicals must NEVER invalidate an insider buy.
 
 def fetch_technical_indicators(ticker: str):
     api_key = os.getenv("FMP_API_KEY")
@@ -145,6 +142,7 @@ def parse_form4(xml_bytes):
     root = ET.fromstring(xml_bytes)
 
     total = 0.0
+    total_shares = 0.0
     date = ""
 
     nd = root.find("nonDerivativeTable")
@@ -161,9 +159,11 @@ def parse_form4(xml_bytes):
             "transactionAmounts/transactionPricePerShare/value", "0"
         ) or 0)
 
-        total += shares * price
+        total_shares += shares
+        if price > 0:
+            total += shares * price
 
-    if total <= 0:
+    if total_shares <= 0:
         return None
 
     return {
@@ -173,6 +173,7 @@ def parse_form4(xml_bytes):
             "reportingOwner/reportingOwnerRelationship/officerTitle", "Insider"
         ),
         "total": round(total, 2),
+        "shares": int(total_shares),
         "date": date
     }
 
@@ -214,8 +215,9 @@ def main():
     state = load_state()
     technicals_cache = {}
 
+    # ✅ FIXED SEC FEED (Form 4 only)
     feed = ET.fromstring(http_get(
-        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
+        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&output=atom"
     ))
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -229,6 +231,7 @@ def main():
 
     for entry in feed.findall("atom:entry", ns):
         total_filings += 1
+        form4_filings += 1
 
         updated = entry.findtext("atom:updated", "", ns)
         if not updated:
@@ -237,24 +240,11 @@ def main():
         if dt.datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None) < cutoff:
             continue
 
-        filing_type = next(
-            (c.get("term") for c in entry.findall("atom:category", ns)
-             if c.get("label") == "form type"),
-            ""
-        )
-
-        if filing_type != "4":
-            non_form4_filings += 1
-            continue
-
-        form4_filings += 1
-
         xml_link = next(
             (l.get("href") for l in entry.findall("atom:link", ns)
              if l.get("type") == "application/xml"),
             None
         )
-
         if not xml_link:
             continue
 
@@ -272,7 +262,6 @@ def main():
         if not market_caps[ticker] or market_caps[ticker] < MIN_MARKET_CAP:
             continue
 
-        # Technicals are OPTIONAL — do NOT filter insider buys
         if ticker not in technicals_cache:
             technicals_cache[ticker] = fetch_technical_indicators(ticker)
 
@@ -302,54 +291,10 @@ def main():
     blocks.append(f"""
     <div class="card">
       <div class="section-title">🛠 System Status</div>
-      <div class="item">SEC filings scanned: {total_filings}</div>
       <div class="item">Form 4 filings scanned: {form4_filings}</div>
-      <div class="item">Non-insider filings scanned: {non_form4_filings}</div>
       <div class="item">Valid insider buys detected: {len(hits)}</div>
     </div>
     """)
-
-    # --- PRE-BREAKOUT WATCHLIST (subset only)
-    pre_breakouts = [
-        h for h in hits
-        if h.get("technicals") and h["technicals"].get("pre_breakout")
-    ]
-
-    blocks.append("""
-    <div class="card">
-      <div class="section-title">🚀 Pre-Breakout Watchlist</div>
-    """)
-
-    if pre_breakouts:
-        for h in pre_breakouts:
-            t = h["technicals"]
-            blocks.append(f"""
-            <div class="item">
-              <strong>{h['ticker']}</strong> —
-              RSI: {t['rsi']} ·
-              ATR: {t['atr']} (avg {t['atr_avg']}) ·
-              MACD: {t['macd']} / {t['signal']}
-            </div>
-            """)
-    else:
-        blocks.append("""
-        <div class="item muted">
-          No pre-breakout setups detected. Compression phases often precede large moves.
-        </div>
-        """)
-
-    blocks.append("</div>")
-
-    blocks.append("<div class='card'><div class='section-title'>📊 Analyst Activity</div>")
-    if analysts:
-        for a in analysts:
-            blocks.append(
-                f"<div class='item'><strong>{a['symbol']}</strong> — "
-                f"{a['analyst']} (+{a['pct']}%)</div>"
-            )
-    else:
-        blocks.append("<div class='item muted'>No material analyst upgrades detected.</div>")
-    blocks.append("</div>")
 
     write_daily_update_html("\n".join(blocks))
 
